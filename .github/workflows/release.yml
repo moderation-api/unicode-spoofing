@@ -33,6 +33,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Node 22 bundles npm 10.x, but Trusted Publishing (the OIDC token
+      # exchange that `changeset publish` -> `npm publish` performs) needs
+      # npm >= 11.5.1. Without it the registry rejects the publish with a
+      # misleading E404 ("not in this registry") instead of an auth error.
+      - name: Upgrade npm for Trusted Publishing (OIDC)
+        run: npm install --global npm@latest
+
       - name: Create release PR or publish to npm
         uses: changesets/action@v1
         with:
