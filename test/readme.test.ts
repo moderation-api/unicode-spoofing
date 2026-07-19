@@ -10,19 +10,54 @@ import { describe, it, expect } from 'vitest';
 import { analyze, skeleton } from '../src';
 
 describe('README — usage', () => {
-  it('quick start', () => {
-    const r = analyze('Неу Anatoly, НОТ busіnеss рrоduсt just drоppеd.');
+  it('resolves three styling systems in one sentence', () => {
+    const r = analyze('Ｇｅｔ 𝐅𝐑𝐄𝐄 ⓒⓡⓨⓟⓣⓞ now');
 
     expect(r.spoofed).toBe(true);
-    expect(r.signals.confusable_word).toBe(true);
-    expect(r.normalized).toBe('Hey Anatoly, HOT business product just dropped.');
-    expect(r.words[1]).toEqual({
-      word: 'НОТ',
-      index: 13,
-      signals: ['confusable_word'],
-      scripts: ['Cyrillic'],
-      skeleton: 'HOT',
+    expect(r.normalized).toBe('Get FREE crypto now');
+    expect(r.dominantScript).toBe('Latin');
+    expect(r.signals).toEqual({
+      mixed_script: false,
+      confusable_word: true,
+      invisible: false,
+      zalgo: false,
+      illegal: false,
     });
+    expect(r.words.map((w) => ({ word: w.word, index: w.index, skeleton: w.skeleton }))).toEqual([
+      { word: 'Ｇｅｔ', index: 0, skeleton: 'Get' },
+      { word: '𝐅𝐑𝐄𝐄', index: 4, skeleton: 'FREE' },
+      { word: 'ⓒⓡⓨⓟⓣⓞ', index: 13, skeleton: 'crypto' },
+    ]);
+    for (const w of r.words) expect(w.signals).toEqual(['confusable_word']);
+  });
+
+  it('the invisible version: same glyphs, different code points', () => {
+    const lookalike: string = 'раураl';
+
+    expect(lookalike === 'paypal').toBe(false);
+    expect([...lookalike].map((c) => c.codePointAt(0)!.toString(16))).toEqual([
+      '440',
+      '430',
+      '443',
+      '440',
+      '430',
+      '6c',
+    ]);
+    expect(analyze('Verify your раураl account').normalized).toBe('Verify your paypal account');
+  });
+
+  it('carries all five signals at once', () => {
+    const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
+
+    expect(r.signals).toEqual({
+      mixed_script: true,
+      confusable_word: true,
+      invisible: true,
+      zalgo: true,
+      illegal: true,
+    });
+    expect(r.normalized).toBe('HOT business: free crypto');
+    expect(r.counts).toEqual({ wordsTotal: 4, wordsAffected: 5 });
 
     expect(skeleton('раураl') === skeleton('paypal')).toBe(true);
   });
