@@ -1,15 +1,23 @@
 version: 2
 updates:
+  # This package has zero runtime dependencies, so routine updates are all
+  # dev-tooling. Batch them into a single monthly PR to keep the noise low —
+  # security fixes come through separately and immediately (Dependabot security
+  # updates), regardless of this schedule.
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
-      dev-dependencies:
-        dependency-type: development
-    open-pull-requests-limit: 5
+      dependencies:
+        patterns: ['*']
+    open-pull-requests-limit: 3
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+    open-pull-requests-limit: 3
