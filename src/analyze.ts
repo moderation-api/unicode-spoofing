@@ -218,10 +218,21 @@ export function analyze(
     }
   }
 
-  let normalized = text;
-  for (const r of replacements.reverse()) {
-    normalized =
-      normalized.slice(0, r.start) + r.value + normalized.slice(r.end);
+  // Rebuild in a single left-to-right pass. Replacements are collected in
+  // ascending, non-overlapping order, so we can stitch the output once instead
+  // of re-slicing the whole string per replacement (which is quadratic when a
+  // message has many affected tokens).
+  let normalized: string;
+  if (replacements.length === 0) {
+    normalized = text;
+  } else {
+    let out = '';
+    let cursor = 0;
+    for (const r of replacements) {
+      out += text.slice(cursor, r.start) + r.value;
+      cursor = r.end;
+    }
+    normalized = out + text.slice(cursor);
   }
 
   return {
