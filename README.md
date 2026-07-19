@@ -44,6 +44,7 @@ skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
 | `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓`        |
 | `invisible`       | Format characters (zero-width etc.) inside a word                    | `fr​ee`                               |
 | `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
+| `illegal`         | Control, non-character, or replacement code points anywhere in text  | `NUL`, `U+FFFE`, `U+FFFD`             |
 
 ### False-positive guards
 
@@ -54,6 +55,10 @@ skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
   like `привет` contain letters with no ASCII prototype and pass through.
 - `expectedScripts: ['Cyrillic']` marks scripts as normal for the caller's
   traffic — whole words in them are never flagged; intra-word mixing still is.
+  Declaring it also sharpens detection the other way: a whole word written
+  entirely in an _unexpected_ script is flagged as `confusable_word` even
+  without a Latin context (e.g. all-Cyrillic `аррӏе` → `apple` when you expect
+  Latin), which a bare call cannot disambiguate from real Cyrillic.
 - Japanese (Han + kana), Korean (Han + Hangul), and Bopomofo-annotated Chinese
   are legitimate single-word script mixes and are exempt.
 - Scripts whose orthography uses joiners/zero-width characters (Arabic, Indic
