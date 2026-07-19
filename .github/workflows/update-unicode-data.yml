@@ -17,9 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Regenerate confusables table from latest Unicode security data
         run: node scripts/generate-confusables.mjs
@@ -27,12 +33,10 @@ jobs:
       - name: Read generated Unicode version
         id: version
         run: |
-          echo "unicode=$(node -e "process.stdout.write(require('fs').readFileSync('src/data/confusables.generated.ts','utf8').match(/UNICODE_VERSION = '([^']+)'/)[1])")" >> "$GITHUB_OUTPUT"
+          echo "unicode=$(sed -n "s/.*UNICODE_VERSION = '\([^']*\)'.*/\1/p" src/data/confusables.generated.ts)" >> "$GITHUB_OUTPUT"
 
       - name: Run tests against the new data
-        run: |
-          npm ci
-          npm test
+        run: pnpm test
 
       - name: Open PR if the data changed
         uses: peter-evans/create-pull-request@v6
