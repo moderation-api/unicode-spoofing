@@ -338,6 +338,10 @@ describe('clean / safe input is NOT flagged', () => {
     expect(sig(run(''))).toBe(false);
   });
 
+  it('regular message with newline', () => {
+    expect(sig(run('Hello\nWorld how are you doing? '))).toBe(false);
+  });
+
   it('ASCII with digits and punctuation is clean', () => {
     expect(sig(run('user_name-42.v2 (ok!)'))).toBe(false);
   });
