@@ -9,6 +9,10 @@ import type { AnalysisResult, AnalyzeOptions, SpoofSignal, WordFinding } from '.
  */
 const TOKEN_RE = /[\p{L}\p{M}\p{N}\p{Cf}'’]+/gu;
 
+/** A single character of the token class above — used to find styled glyphs
+ * (circled/parenthesized letters, category So) that fall OUTSIDE any token. */
+const TOKEN_CHAR_RE = /[\p{L}\p{M}\p{N}\p{Cf}'’]/u;
+
 const LETTER_RE = /\p{L}/u;
 const MARK_RE = /\p{M}/u;
 const FORMAT_RE = /\p{Cf}/u;
@@ -47,12 +51,30 @@ const FORMAT_CHAR_SCRIPTS = new Set([
 /** Combining marks stacked deeper than this on one base = zalgo. */
 const ZALGO_MARK_RUN = 3;
 
+/**
+ * Code points that have no business appearing in ordinary text and that the
+ * token scanner would otherwise silently drop (they are not letters, marks,
+ * numbers or format characters, so they never enter a word): C0/C1 controls,
+ * DEL, Unicode non-characters and the replacement character. TAB, LF and CR
+ * are the only C0 controls treated as legitimate whitespace.
+ */
+function isIllegalCodePoint(cp: number): boolean {
+  if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false; // TAB, LF, CR
+  if (cp < 0x20) return true; // C0 controls
+  if (cp >= 0x7f && cp <= 0x9f) return true; // DEL + C1 controls
+  if (cp >= 0xfdd0 && cp <= 0xfdef) return true; // non-characters (BMP block)
+  if ((cp & 0xfffe) === 0xfffe) return true; // U+xxFFFE / U+xxFFFF in every plane
+  if (cp === 0xfffd) return true; // replacement character (mojibake / decode damage)
+  return false;
+}
+
 function emptySignals(): Record<SpoofSignal, boolean> {
   return {
     mixed_script: false,
     confusable_word: false,
     invisible: false,
     zalgo: false,
+    illegal: false,
   };
 }
 
@@ -99,51 +121,87 @@ function analyzeToken(
 
   if (mixed) signals.push('mixed_script');
 
-  // confusable_word: a whole word written as lookalikes of Latin — e.g.
-  // all-Cyrillic "НОТ" whose skeleton is "HOT". Requires:
+  // confusable_word (cross-script): a whole word written as lookalikes of
+  // Latin — e.g. all-Cyrillic "НОТ" whose skeleton is "HOT". Requires:
   //  - at least two letters (single letters are too ambiguous),
   //  - the word itself is not plain ASCII,
   //  - its UTS #39 skeleton IS plain ASCII with at least one letter,
   //  - it is not written in a script the caller expects, and
-  //  - the context suggests Latin content: the message is Latin-dominant,
-  //    other words in it already mix scripts, or the word's own script is
-  //    Latin (fullwidth/math styles carry Script=Latin).
+  //  - either the context suggests Latin content (message is Latin-dominant,
+  //    other words already mix scripts, or the word's own script is Latin), or
+  //    the caller declared the scripts they expect and this word is entirely
+  //    OUTSIDE them — a whole word in an unexpected script is spoof evidence
+  //    on its own, no Latin context needed.
+  let skeletonConfusable = false;
   if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
     const inExpectedScript = scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
     const latinContext =
       dominantScript === 'Latin' ||
       anyMixedInMessage ||
       (scripts.length > 0 && scripts.every((s) => s === 'Latin'));
-    if (!inExpectedScript && latinContext) {
+    const outsideExpected =
+      expectedScripts.size > 0 &&
+      scripts.length > 0 &&
+      scripts.every((s) => !expectedScripts.has(s));
+    if (!inExpectedScript && (latinContext || outsideExpected)) {
       const sk = skeleton(token);
       if (ASCII_PRINTABLE_RE.test(sk) && ASCII_LETTER_RE.test(sk)) {
         signals.push('confusable_word');
+        skeletonConfusable = true;
+      }
+    }
+  }
+
+  // confusable_word (compatibility styling): a word spelled in a pseudo-script
+  // presentation form — fullwidth "ａｄｍｉｎ", circled "Ⓐⓓⓜⓘⓝ", math-alphanumeric
+  // "𝗉𝗋𝖾𝗆𝗂𝗎𝗆" — that NFKC folds straight to an ASCII word. Unlike genuine
+  // scripts this is never legitimate orthography, so it is not gated by script
+  // context or expectedScripts. Requiring at least two styled LETTERS keeps
+  // isolated compatibility symbols used in real text (m², №, ½, ℃, Ⅳ) out.
+  let styledConfusable = false;
+  if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
+    const styledLetters = letters.filter((ch) => {
+      const nf = ch.normalize('NFKC');
+      return nf !== ch && ASCII_PRINTABLE_RE.test(nf) && ASCII_LETTER_RE.test(nf);
+    });
+    if (styledLetters.length >= 2) {
+      const fold = token.normalize('NFKC');
+      if (fold !== token && ASCII_PRINTABLE_RE.test(fold) && ASCII_LETTER_RE.test(fold)) {
+        styledConfusable = true;
+        if (!signals.includes('confusable_word')) signals.push('confusable_word');
       }
     }
   }
 
   // De-obfuscate affected tokens only. Order matters: drop invisibles and
-  // zalgo marks first, then fold lookalikes of mixed/confusable words.
+  // zalgo marks first, then fold lookalikes. A word that is ONLY styled folds
+  // via NFKC (fullwidth/circled/math → ASCII); cross-script confusables fold
+  // via the skeleton map. Using NFKC for math styles resolves the real word
+  // rather than the per-glyph skeleton (e.g. "premium", not "prerniurn").
   let normalized = token;
   if (signals.length > 0) {
-    const foldLookalikes = signals.includes('mixed_script') || signals.includes('confusable_word');
+    const foldLookalikes = signals.includes('mixed_script') || skeletonConfusable;
+    const nfkcFold = styledConfusable && !foldLookalikes;
     normalized = chars
       .map((ch) => {
         if (signals.includes('invisible') && FORMAT_RE.test(ch)) return '';
         if (zalgo && MARK_RE.test(ch)) return '';
+        if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
       })
-      .join('')
-      .normalize('NFC');
+      .join('');
+    if (nfkcFold) normalized = normalized.normalize('NFKC');
+    normalized = normalized.normalize('NFC');
   }
+
+  let resolvedSkeleton: string | undefined;
+  if (signals.includes('mixed_script') || skeletonConfusable) resolvedSkeleton = skeleton(token);
+  else if (styledConfusable) resolvedSkeleton = token.normalize('NFKC').normalize('NFC');
 
   return {
     signals,
     scripts,
-    skeleton:
-      signals.includes('mixed_script') || signals.includes('confusable_word')
-        ? skeleton(token)
-        : undefined,
+    skeleton: resolvedSkeleton,
     normalized,
   };
 }
@@ -201,6 +259,75 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       });
     }
   }
+
+  // Illegal code points live *between* tokens (the token scanner drops them),
+  // so they are found in a separate pass over the raw text. Each becomes its
+  // own finding and is stripped from the normalized output.
+  for (let i = 0; i < text.length;) {
+    const cp = text.codePointAt(i)!;
+    const width = cp > 0xffff ? 2 : 1;
+    if (isIllegalCodePoint(cp)) {
+      const char = String.fromCodePoint(cp);
+      signals.illegal = true;
+      words.push({ word: char, index: i, signals: ['illegal'], scripts: [] });
+      replacements.push({ start: i, end: i + width, value: '' });
+    }
+    i += width;
+  }
+
+  // Compatibility-styled letter runs the token scanner skips because the glyphs
+  // are symbols, not letters (category So): circled "Ⓐⓓⓜⓘⓝ", parenthesized,
+  // squared. A run of >=2 such glyphs whose NFKC form is an ASCII word is the
+  // same disguised-word attack as fullwidth/math styling (which tokenize and are
+  // handled per-token). Runs of styled DIGITS (①②③ -> 123) fold to non-letters
+  // and are ignored, keeping legitimate enclosed numbering out.
+  {
+    let runStart = -1;
+    let runCount = 0;
+    const flush = (end: number) => {
+      if (runStart >= 0 && runCount >= 2) {
+        const fold = text.slice(runStart, end).normalize('NFKC').normalize('NFC');
+        if (ASCII_PRINTABLE_RE.test(fold) && ASCII_LETTER_RE.test(fold)) {
+          signals.confusable_word = true;
+          words.push({
+            word: text.slice(runStart, end),
+            index: runStart,
+            signals: ['confusable_word'],
+            scripts: [],
+            skeleton: fold,
+          });
+          replacements.push({ start: runStart, end, value: fold });
+        }
+      }
+      runStart = -1;
+      runCount = 0;
+    };
+    for (let i = 0; i < text.length;) {
+      const cp = text.codePointAt(i)!;
+      const width = cp > 0xffff ? 2 : 1;
+      const ch = String.fromCodePoint(cp);
+      const nf = ch.normalize('NFKC');
+      const styledLetter =
+        !TOKEN_CHAR_RE.test(ch) &&
+        nf !== ch &&
+        ASCII_LETTER_RE.test(nf) &&
+        ASCII_PRINTABLE_RE.test(nf);
+      if (styledLetter) {
+        if (runStart < 0) runStart = i;
+        runCount += 1;
+      } else {
+        flush(i);
+      }
+      i += width;
+    }
+    flush(text.length);
+  }
+
+  // Findings and replacements may now be interleaved (tokens vs. illegal code
+  // points vs. styled runs); sort both into ascending order so evidence reads
+  // left-to-right and the single-pass rebuild below stays valid.
+  words.sort((a, b) => a.index - b.index);
+  replacements.sort((a, b) => a.start - b.start);
 
   // Rebuild in a single left-to-right pass. Replacements are collected in
   // ascending, non-overlapping order, so we can stitch the output once instead

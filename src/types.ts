@@ -1,14 +1,19 @@
-export type SpoofSignal = 'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo';
+export type SpoofSignal = 'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo' | 'illegal';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'mixed_script',
   'confusable_word',
   'invisible',
   'zalgo',
+  'illegal',
 ];
 
 export interface WordFinding {
-  /** The token exactly as it appears in the input. */
+  /**
+   * The token exactly as it appears in the input. For an `illegal` finding
+   * (a lone control / non-character code point, which is never part of a
+   * token) this is the offending character on its own.
+   */
   word: string;
   /** Codepoint-safe character offset of the token in the input string. */
   index: number;
