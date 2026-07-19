@@ -368,7 +368,11 @@ describe('clean / safe input is NOT flagged', () => {
   });
 
   it('plain emoji is not treated as a spoof', () => {
-    expect(sig(run('great work \u{1F44D}\u{1F389}'))).toBe(false);
+    expect(sig(run('great work\u{1F44D}\u{1F389}'))).toBe(false);
+  });
+
+  it('single emoji is not treated as a spoof', () => {
+    expect(sig(run('\u{1F44D}'))).toBe(false);
   });
 });
 
