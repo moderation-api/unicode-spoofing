@@ -430,14 +430,15 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   // are symbols, not letters (category So): circled "Ⓐⓓⓜⓘⓝ", parenthesized,
   // squared. A run of >=2 such glyphs whose NFKC form is an ASCII word is the
   // same disguised-word attack as fullwidth/math styling (which tokenize and are
-  // handled per-token). Runs of styled DIGITS (①②③ -> 123) fold to non-letters
-  // and are ignored, keeping legitimate enclosed numbering out.
+  // handled per-token).
   {
     let runStart = -1;
     let runCount = 0;
     const flush = (end: number) => {
       if (runStart >= 0 && runCount >= 2) {
         const fold = text.slice(runStart, end).normalize('NFKC').normalize('NFC');
+        // Belt-and-braces: every character in the run already passed these two
+        // tests individually, so the concatenation cannot fail them.
         if (ASCII_PRINTABLE_RE.test(fold) && ASCII_LETTER_RE.test(fold)) {
           signals.confusable_word = true;
           words.push({
@@ -458,6 +459,8 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       const width = cp > 0xffff ? 2 : 1;
       const ch = String.fromCodePoint(cp);
       const nf = ch.normalize('NFKC');
+      // Styled DIGITS (①②③ -> 123) fail ASCII_LETTER_RE and so never join a
+      // run, keeping legitimate enclosed numbering out.
       const styledLetter =
         !TOKEN_CHAR_RE.test(ch) &&
         nf !== ch &&

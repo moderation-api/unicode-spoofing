@@ -77,6 +77,16 @@ describe('analyze — spoofed content', () => {
     expect(hot!.signals).toContain('confusable_word');
   });
 
+  it('flags Unicode non-characters as illegal code points', () => {
+    // Two disjoint ranges reach the same verdict: the BMP block U+FDD0–U+FDEF
+    // and the U+xxFFFE/U+xxFFFF pair that closes every plane.
+    for (const text of ['hi ﷐ there', 'hi ￾ there', 'hi \u{1fffe} there']) {
+      const r = analyze(text);
+      expect(r.signals.illegal).toBe(true);
+      expect(r.normalized).toBe('hi  there');
+    }
+  });
+
   it('reports codepoint-accurate word offsets', () => {
     const r = analyze(CUSTOMER_SAMPLE);
     for (const w of r.words) {
@@ -107,6 +117,20 @@ describe('analyze — legitimate content', () => {
     expect(r.words).toEqual([]);
     expect(r.changed).toBe(false);
     expect(r.normalized).toBe(text);
+  });
+
+  it('does not call a styled word confusable unless the whole word folds to ASCII', () => {
+    // "𝗉𝗋é" has two styled letters that individually fold to ASCII, but the
+    // token folds to "pré" — still non-ASCII, so it is not a disguised word.
+    const r = analyze('𝗉𝗋é');
+    expect(r.signals.confusable_word).toBe(false);
+  });
+
+  it('ignores runs of enclosed digits, which fold to non-letters', () => {
+    // ①②③ → "123": a styled run, but not a disguised WORD. Legitimate
+    // enclosed numbering must survive untouched.
+    const r = analyze('see item ①②③ below');
+    expect(r.signals.confusable_word).toBe(false);
   });
 
   it('treats expected scripts as legitimate for whole words', () => {
