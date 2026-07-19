@@ -80,9 +80,7 @@ describe('analyze — spoofed content', () => {
   it('reports codepoint-accurate word offsets', () => {
     const r = analyze(CUSTOMER_SAMPLE);
     for (const w of r.words) {
-      expect(CUSTOMER_SAMPLE.slice(w.index, w.index + w.word.length)).toBe(
-        w.word,
-      );
+      expect(CUSTOMER_SAMPLE.slice(w.index, w.index + w.word.length)).toBe(w.word);
     }
   });
 });
@@ -115,9 +113,7 @@ describe('analyze — legitimate content', () => {
     // Without expectedScripts this could look suspicious in Latin-dominant
     // text; with them, whole Cyrillic words are the sender's normal traffic.
     const text = 'Order confirmed — спасибо за покупку!';
-    expect(analyze(text, { expectedScripts: ['Cyrillic'] }).spoofed).toBe(
-      false,
-    );
+    expect(analyze(text, { expectedScripts: ['Cyrillic'] }).spoofed).toBe(false);
   });
 
   it('still flags intra-word mixing when the script is expected', () => {

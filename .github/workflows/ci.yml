@@ -27,8 +27,17 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      - name: Format check
+        run: pnpm run format:check
+
       - name: Test
-        run: pnpm test
+        run: pnpm run test:coverage
 
       - name: Build
         run: pnpm run build
+
+      - name: Check package exports (publint)
+        run: pnpm run publint
+
+      - name: Check type resolution (are-the-types-wrong)
+        run: pnpm run attw

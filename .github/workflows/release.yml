@@ -1,0 +1,45 @@
+# Opens/updates a "Version Packages" PR from pending changesets, and publishes
+# to npm when that PR is merged. Publishing uses npm Trusted Publishing (OIDC) —
+# no NPM_TOKEN secret. See RELEASING.md for the one-time npmjs.com setup.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create release PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          version: pnpm run version
+          publish: pnpm run release
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'

@@ -170,11 +170,7 @@ export function analyzeWordScripts(letters: string[]): {
   const list = [...scripts];
   if (list.length <= 1) return { scripts: list, mixed: false };
 
-  if (
-    LEGITIMATE_COMBINATIONS.some((combo) =>
-      list.every((s) => combo.includes(s)),
-    )
-  ) {
+  if (LEGITIMATE_COMBINATIONS.some((combo) => list.every((s) => combo.includes(s)))) {
     return { scripts: list, mixed: false };
   }
 
@@ -183,9 +179,7 @@ export function analyzeWordScripts(letters: string[]): {
     return s === 'Common' || s === 'Inherited' || s === 'Unknown';
   };
   const covered = list.some((candidate) =>
-    letters.every(
-      (ch) => isWildcard(ch) || inScriptExtensions(ch, candidate),
-    ),
+    letters.every((ch) => isWildcard(ch) || inScriptExtensions(ch, candidate)),
   );
   return { scripts: list, mixed: !covered };
 }

@@ -74,6 +74,4 @@ ${chunks.map((c) => `  '${c}'`).join(' +\n')};
 `,
 );
 
-console.log(
-  `Wrote ${entries.length} mappings (Unicode ${versionMatch[1]}) to ${outPath}`,
-);
+console.log(`Wrote ${entries.length} mappings (Unicode ${versionMatch[1]}) to ${outPath}`);

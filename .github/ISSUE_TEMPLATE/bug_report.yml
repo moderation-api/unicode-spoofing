@@ -1,0 +1,34 @@
+name: Bug report
+description: A detection is wrong, or the library crashes/hangs
+labels: [bug]
+body:
+  - type: textarea
+    id: input
+    attributes:
+      label: Input string
+      description: The exact text passed to analyze() (paste raw; do not "clean" it).
+      placeholder: 'НОТ busіnеss'
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What did you expect analyze()/skeleton() to return, and what did it return?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Node version
+      placeholder: v22.x
+    validations:
+      required: true

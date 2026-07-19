@@ -1,11 +1,6 @@
 import { foldChar, skeleton } from './confusables';
 import { analyzeWordScripts, primaryScript } from './scripts';
-import type {
-  AnalysisResult,
-  AnalyzeOptions,
-  SpoofSignal,
-  WordFinding,
-} from './types';
+import type { AnalysisResult, AnalyzeOptions, SpoofSignal, WordFinding } from './types';
 
 /**
  * Tokens are runs of letters, marks, digits, format (invisible) characters,
@@ -114,8 +109,7 @@ function analyzeToken(
   //    other words in it already mix scripts, or the word's own script is
   //    Latin (fullwidth/math styles carry Script=Latin).
   if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
-    const inExpectedScript =
-      scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
+    const inExpectedScript = scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
     const latinContext =
       dominantScript === 'Latin' ||
       anyMixedInMessage ||
@@ -132,8 +126,7 @@ function analyzeToken(
   // zalgo marks first, then fold lookalikes of mixed/confusable words.
   let normalized = token;
   if (signals.length > 0) {
-    const foldLookalikes =
-      signals.includes('mixed_script') || signals.includes('confusable_word');
+    const foldLookalikes = signals.includes('mixed_script') || signals.includes('confusable_word');
     normalized = chars
       .map((ch) => {
         if (signals.includes('invisible') && FORMAT_RE.test(ch)) return '';
@@ -155,10 +148,7 @@ function analyzeToken(
   };
 }
 
-export function analyze(
-  text: string,
-  options: AnalyzeOptions = {},
-): AnalysisResult {
+export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisResult {
   const expectedScripts = new Set(options.expectedScripts ?? []);
   const tokens = [...text.matchAll(TOKEN_RE)];
 
@@ -183,8 +173,7 @@ export function analyze(
   // that lets whole-word confusables flag even when lookalikes outnumber
   // genuine Latin letters (as in heavily obfuscated messages).
   const anyMixedInMessage = tokens.some(
-    (t) =>
-      analyzeWordScripts([...t[0]].filter((ch) => LETTER_RE.test(ch))).mixed,
+    (t) => analyzeWordScripts([...t[0]].filter((ch) => LETTER_RE.test(ch))).mixed,
   );
 
   const signals = emptySignals();
@@ -193,12 +182,7 @@ export function analyze(
 
   for (const match of tokens) {
     const token = match[0];
-    const result = analyzeToken(
-      token,
-      dominantScript,
-      anyMixedInMessage,
-      expectedScripts,
-    );
+    const result = analyzeToken(token, dominantScript, anyMixedInMessage, expectedScripts);
     if (result.signals.length === 0) continue;
 
     for (const s of result.signals) signals[s] = true;

@@ -1,5 +1,9 @@
 # @moderation-api/unicode-spoofing
 
+[![npm version](https://img.shields.io/npm/v/@moderation-api/unicode-spoofing.svg)](https://www.npmjs.com/package/@moderation-api/unicode-spoofing)
+[![CI](https://github.com/moderation-api/unicode-spoofing/actions/workflows/ci.yml/badge.svg)](https://github.com/moderation-api/unicode-spoofing/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 Detection of Unicode-based text obfuscation ("homoglyph attacks"): spammers
 mixing lookalike characters into words to slip past keyword filters, e.g.
 `НОТ busіnеss рrоduсt` — visually clean, but `НОТ` is pure Cyrillic and
@@ -24,22 +28,22 @@ npm install @moderation-api/unicode-spoofing
 import { analyze, skeleton } from '@moderation-api/unicode-spoofing';
 
 const r = analyze('Неу Anatoly, НОТ busіnеss рrоduсt just drоppеd.');
-r.spoofed;        // true
-r.signals;        // { mixed_script: true, confusable_word: true, invisible: false, zalgo: false }
-r.words;          // [{ word: 'НОТ', skeleton: 'HOT', scripts: ['Cyrillic'], signals: ['confusable_word'], index: 13 }, …]
-r.normalized;     // 'Hey Anatoly, HOT business product just dropped.'
+r.spoofed; // true
+r.signals; // { mixed_script: true, confusable_word: true, invisible: false, zalgo: false }
+r.words; // [{ word: 'НОТ', skeleton: 'HOT', scripts: ['Cyrillic'], signals: ['confusable_word'], index: 13 }, …]
+r.normalized; // 'Hey Anatoly, HOT business product just dropped.'
 
 skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
 ```
 
 ## Signals
 
-| Signal | Meaning | Example |
-|---|---|---|
-| `mixed_script` | One word blends multiple scripts | `busіnеss` (Latin + Cyrillic `і`/`е`) |
-| `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓` |
-| `invisible` | Format characters (zero-width etc.) inside a word | `fr​ee` |
-| `zalgo` | Combining marks stacked beyond orthographic depth (≥3 per base) | `Z̸̢̬a̛lg̕o` |
+| Signal            | Meaning                                                              | Example                               |
+| ----------------- | -------------------------------------------------------------------- | ------------------------------------- |
+| `mixed_script`    | One word blends multiple scripts                                     | `busіnеss` (Latin + Cyrillic `і`/`е`) |
+| `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓`        |
+| `invisible`       | Format characters (zero-width etc.) inside a word                    | `fr​ee`                               |
+| `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
 
 ### False-positive guards
 
@@ -56,7 +60,7 @@ skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
   scripts, Persian ZWNJ, …) are exempt from `invisible`; scripts with stacked
   marks (Hebrew points, Arabic tashkeel, …) are exempt from `zalgo`. Emoji ZWJ
   sequences are never word tokens, so they are never flagged.
-- `normalized` only rewrites *affected* words; legitimate non-Latin text is
+- `normalized` only rewrites _affected_ words; legitimate non-Latin text is
   returned byte-for-byte.
 
 ## Updating the Unicode data

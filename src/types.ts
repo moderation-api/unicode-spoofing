@@ -1,8 +1,4 @@
-export type SpoofSignal =
-  | 'mixed_script'
-  | 'confusable_word'
-  | 'invisible'
-  | 'zalgo';
+export type SpoofSignal = 'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'mixed_script',
