@@ -12,6 +12,13 @@ updates:
       dependencies:
         patterns: ['*']
     open-pull-requests-limit: 3
+    ignore:
+      # The build bundles .d.ts via tsup (rollup-plugin-dts), which needs the
+      # JS Compiler API that the native typescript@7 does not expose yet. Stay
+      # on the 6.x (JS-based) line until the dts toolchain supports the native
+      # compiler; the native @7 is used for type-checking via tsgo separately.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /

@@ -39,8 +39,13 @@ manual publish to reserve the name, then switch to the automated flow:
 
 ```bash
 pnpm build
-npm publish --access public --provenance   # requires npm login with 2FA
+npm publish --access public   # requires npm login with 2FA
 ```
+
+> **Do not pass `--provenance` here.** Provenance is generated from a CI OIDC
+> token, so it only works inside the Release workflow — a manual local publish
+> fails with `Automatic provenance generation not supported for provider: null`.
+> The automated flow sets `NPM_CONFIG_PROVENANCE=true` for you.
 
 After that first publish, configure the trusted publisher (above) and all
 subsequent releases go through the Release workflow with no token.
