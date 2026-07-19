@@ -2,6 +2,15 @@ name: Bug report
 description: A detection is wrong, or the library crashes/hangs
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        💡 **The fastest fix starts with a test.** If a specific string is
+        handled wrong, consider opening a PR that adds it as a case in
+        `test/cases.data.ts` (see [CONTRIBUTING](../blob/main/CONTRIBUTING.md#found-a-string-we-handle-wrong-start-with-a-case-test-first)).
+        A case with `status: 'unsupported'` keeps CI green and documents the gap —
+        you don't need to write the fix. Otherwise, fill this out and we'll turn
+        it into a case.
   - type: textarea
     id: input
     attributes:
