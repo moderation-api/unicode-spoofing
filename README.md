@@ -29,15 +29,55 @@ npm install @moderation-api/unicode-spoofing
 ## Usage
 
 ```ts
-import { analyze, skeleton } from '@moderation-api/unicode-spoofing';
+import { analyze } from '@moderation-api/unicode-spoofing';
 
-const r = analyze('Неу Anatoly, НОТ busіnеss рrоduсt just drоppеd.');
+const r = analyze('Ｇｅｔ 𝐅𝐑𝐄𝐄 ⓒⓡⓨⓟⓣⓞ now');
 
 r.spoofed; // true
-r.signals.confusable_word; // true
-r.normalized; // 'Hey Anatoly, HOT business product just dropped.'
-r.words[1]; // { word: 'НОТ', index: 13, signals: ['confusable_word'],
-//              scripts: ['Cyrillic'], skeleton: 'HOT' }
+r.normalized; // 'Get FREE crypto now'
+r.dominantScript; // 'Latin'
+
+r.signals;
+// {
+//   mixed_script: false,
+//   confusable_word: true,   <- fullwidth, math-bold and circled letters
+//   invisible: false,
+//   zalgo: false,
+//   illegal: false,
+// }
+
+r.words;
+// [{ word: 'Ｇｅｔ',    index: 0,  signals: ['confusable_word'], skeleton: 'Get' },
+//  { word: '𝐅𝐑𝐄𝐄',   index: 4,  signals: ['confusable_word'], skeleton: 'FREE' },
+//  { word: 'ⓒⓡⓨⓟⓣⓞ', index: 13, signals: ['confusable_word'], skeleton: 'crypto' }]
+```
+
+Three spellings of the alphabet, one clean sentence back. `now` was already
+ASCII, so it is returned untouched.
+
+That example is easy to spot. The one that actually gets past moderators is
+the same trick with letters that are pixel-identical to yours:
+
+```ts
+const lookalike: string = 'раураl';
+
+lookalike === 'paypal'; // false
+[...lookalike].map((c) => c.codePointAt(0).toString(16));
+// ['440', '430', '443', '440', '430', '6c']  — Cyrillic, except the final 'l'
+
+analyze('Verify your раураl account').normalized; // 'Verify your paypal account'
+```
+
+A single message can carry several signals at once — here a Cyrillic lookalike
+word, an intra-word script mix, a zero-width space, stacked combining marks and
+a stray NUL byte:
+
+```ts
+const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
+
+r.signals; // every one of the five is true
+r.normalized; // 'HOT business: free crypto'
+r.counts; // { wordsTotal: 4, wordsAffected: 5 }
 
 skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
 ```
