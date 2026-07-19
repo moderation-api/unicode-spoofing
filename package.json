@@ -49,6 +49,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:gaps": "vitest run -c vitest.gaps.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "publint": "publint",
