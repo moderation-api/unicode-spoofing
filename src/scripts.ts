@@ -72,6 +72,9 @@ const SCRIPT_NAMES = [
   'Limbu',
   'New_Tai_Lue',
   'Ol_Chiki',
+  // Named so its invisible vowel sign (U+110B1) is recognised as native
+  // orthography rather than as a hidden character. See INVISIBLE_MARKS.
+  'Kaithi',
 ];
 
 const scriptRegexes: Array<{ name: string; re: RegExp }> = [];

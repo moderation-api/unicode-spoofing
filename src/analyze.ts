@@ -20,6 +20,70 @@ const ASCII_PRINTABLE_RE = /^[\x20-\x7e]+$/;
 const ASCII_LETTER_RE = /[a-zA-Z]/;
 
 /**
+ * Characters adjacent to which an invisible run is legitimate: emoji and other
+ * symbols build their sequences out of ZWJ, variation selectors and tag
+ * characters, and enclosing marks build keycaps. Used only by the standalone
+ * pass, where an invisible character has no word to belong to.
+ */
+const SEQUENCE_NEIGHBOUR_RE = /[\p{Extended_Pictographic}\p{Me}\p{Regional_Indicator}]/u;
+
+/**
+ * Blank glyphs: they occupy space but draw nothing, and — unlike the Unicode
+ * whitespace family (U+00A0, U+2000..U+200A, U+3000 …) — they are not
+ * whitespace, so no downstream `\s` normalization or word split touches them.
+ * That makes them a way to break a word ("fr<filler>ee") while it still reads
+ * normally. The Hangul fillers are category Lo, so without this set they enter
+ * words as Hangul letters and misreport as `mixed_script`.
+ */
+const BLANK_CHARS = new Set([
+  0x115f, // HANGUL CHOSEONG FILLER
+  0x1160, // HANGUL JUNGSEONG FILLER
+  0x3164, // HANGUL FILLER
+  0xffa0, // HALFWIDTH HANGUL FILLER
+  0x2800, // BRAILLE PATTERN BLANK
+  0x1d159, // MUSICAL SYMBOL NULL NOTEHEAD
+]);
+
+/**
+ * Combining marks that render as nothing. They are category Mn rather than Cf,
+ * so the format-character rule misses them. Each is legitimate inside its own
+ * script (Khmer, Kaithi) — which the `scriptExempt` check below preserves — and
+ * pure obfuscation inside a Latin word.
+ */
+const INVISIBLE_MARKS = new Set([
+  0x034f, // COMBINING GRAPHEME JOINER
+  0x17b4, // KHMER VOWEL INHERENT AQ
+  0x17b5, // KHMER VOWEL INHERENT AA
+  0x110b1, // KAITHI VOWEL SIGN I
+]);
+
+/** Variation selectors, incl. the Mongolian free variation selectors. */
+function isVariationSelector(cp: number): boolean {
+  return (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x180b && cp <= 0x180d);
+}
+
+/**
+ * Scripts whose letters legitimately take a variation selector: ideographic
+ * variation sequences (Han and the Japanese kana that mix with it) and the
+ * Mongolian free variation selectors. A selector on a letter of any OTHER
+ * script has no registered sequence — it renders as nothing and is a payload
+ * channel ("ASCII smuggling"). Selectors on symbols (❤️, keycaps, ™️) are not
+ * covered here at all: they never sit in a word.
+ */
+const VARIATION_BASE_SCRIPTS = new Set(['Han', 'Hiragana', 'Katakana', 'Mongolian']);
+
+/** A handful of characters are letters AND emoji — U+2139 "ℹ" is the common
+ * one — so they take the emoji presentation selector legitimately. */
+const PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
+
+/** Renders as nothing, in any context. Variation selectors are contextual and
+ * are judged separately, against the base character they follow. */
+function isInvisibleChar(ch: string): boolean {
+  const cp = ch.codePointAt(0)!;
+  return FORMAT_RE.test(ch) || BLANK_CHARS.has(cp) || INVISIBLE_MARKS.has(cp);
+}
+
+/**
  * Scripts in which format characters (ZWJ/ZWNJ/ZWSP…) or stacked combining
  * marks are part of normal orthography. Tokens whose letters touch these
  * scripts are exempt from the invisible and zalgo signals.
@@ -46,6 +110,7 @@ const FORMAT_CHAR_SCRIPTS = new Set([
   'Khmer',
   'Tibetan',
   'Hebrew',
+  'Kaithi',
 ]);
 
 /** Combining marks stacked deeper than this on one base = zalgo. */
@@ -66,6 +131,16 @@ function isIllegalCodePoint(cp: number): boolean {
   if ((cp & 0xfffe) === 0xfffe) return true; // U+xxFFFE / U+xxFFFF in every plane
   if (cp === 0xfffd) return true; // replacement character (mojibake / decode damage)
   return false;
+}
+
+/**
+ * The whole character ending at `i` — stepping back over a surrogate pair so an
+ * astral neighbour (an emoji, typically) reads as itself and not as half of one.
+ */
+function charBefore(text: string, i: number): string {
+  const unit = text.charCodeAt(i - 1);
+  if (unit >= 0xdc00 && unit <= 0xdfff && i >= 2) return text.slice(i - 2, i);
+  return text[i - 1]!;
 }
 
 function emptySignals(): Record<SpoofSignal, boolean> {
@@ -92,7 +167,10 @@ function analyzeToken(
   expectedScripts: Set<string>,
 ): TokenAnalysis {
   const chars = [...token];
-  const letters = chars.filter((ch) => LETTER_RE.test(ch));
+  // Blank glyphs are excluded before script analysis: a Hangul filler is a
+  // Hangul *letter* to the property tables, and counting it as one would report
+  // "fr<filler>ee" as a Latin/Hangul mix rather than as a hidden character.
+  const letters = chars.filter((ch) => LETTER_RE.test(ch) && !isInvisibleChar(ch));
   const signals: SpoofSignal[] = [];
 
   // Letterless tokens (numbers, stray format characters between emoji) carry
@@ -105,9 +183,26 @@ function analyzeToken(
   const { scripts, mixed } = analyzeWordScripts(letters);
   const scriptExempt = scripts.some((s) => FORMAT_CHAR_SCRIPTS.has(s));
 
-  // invisible: format characters inside a word of non-joining scripts.
-  const hasFormatChars = chars.some((ch) => FORMAT_RE.test(ch));
-  if (hasFormatChars && !scriptExempt) signals.push('invisible');
+  // invisible: characters that render as nothing inside a word of a script that
+  // does not use them — format characters, blank glyphs, invisible marks, and
+  // variation selectors sitting on a base with no registered sequence.
+  const strayVariation = new Set<number>();
+  for (let i = 0; i < chars.length; i += 1) {
+    const cp = chars[i]!.codePointAt(0)!;
+    if (!isVariationSelector(cp)) continue;
+    // The base is the last character that is not itself a selector.
+    let base: string | undefined;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      if (!isVariationSelector(chars[j]!.codePointAt(0)!)) {
+        base = chars[j];
+        break;
+      }
+    }
+    if (base === undefined || !LETTER_RE.test(base) || PICTOGRAPHIC_RE.test(base)) continue;
+    if (!VARIATION_BASE_SCRIPTS.has(primaryScript(base))) strayVariation.add(i);
+  }
+  const hasInvisible = chars.some((ch) => isInvisibleChar(ch)) || strayVariation.size > 0;
+  if (hasInvisible && !scriptExempt) signals.push('invisible');
 
   // zalgo: combining marks stacked beyond orthographic depth.
   let markRun = 0;
@@ -182,9 +277,10 @@ function analyzeToken(
   if (signals.length > 0) {
     const foldLookalikes = signals.includes('mixed_script') || skeletonConfusable;
     const nfkcFold = styledConfusable && !foldLookalikes;
+    const dropInvisible = signals.includes('invisible');
     normalized = chars
-      .map((ch) => {
-        if (signals.includes('invisible') && FORMAT_RE.test(ch)) return '';
+      .map((ch, i) => {
+        if (dropInvisible && (isInvisibleChar(ch) || strayVariation.has(i))) return '';
         if (zalgo && MARK_RE.test(ch)) return '';
         if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
@@ -213,7 +309,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   // Dominant script: most frequent primary script across all letters.
   const scriptCounts = new Map<string, number>();
   for (const ch of text) {
-    if (!LETTER_RE.test(ch)) continue;
+    if (!LETTER_RE.test(ch) || isInvisibleChar(ch)) continue;
     const s = primaryScript(ch);
     if (s === 'Common' || s === 'Inherited' || s === 'Unknown') continue;
     scriptCounts.set(s, (scriptCounts.get(s) ?? 0) + 1);
@@ -257,6 +353,61 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
         end: match.index + token.length,
         value: result.normalized,
       });
+    }
+  }
+
+  // Invisible characters that belong to no word: between punctuation, between
+  // spaces, or attached to a symbol. The per-token pass above cannot see them —
+  // a lone format character forms a token of its own with no letters in it, and
+  // a blank glyph is not a token character at all. This is what hides the two
+  // isolates in a Trojan Source line ("user<RLO> <LRI>// admin").
+  {
+    // Positions covered by a word the token pass already judged; invisibles
+    // inside one are that word's business. A mask keeps this pass linear.
+    const wordMask = new Uint8Array(text.length);
+    for (const t of tokens) {
+      if (!LETTER_RE.test(t[0])) continue;
+      wordMask.fill(1, t.index, t.index + t[0].length);
+    }
+    const inWord = (i: number) => wordMask[i] === 1;
+
+    for (let i = 0; i < text.length;) {
+      const cp = text.codePointAt(i)!;
+      const width = cp > 0xffff ? 2 : 1;
+      const ch = String.fromCodePoint(cp);
+      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i)) {
+        i += width;
+        continue;
+      }
+
+      // Extend over the whole invisible run so a payload reports as one finding.
+      let end = i + width;
+      while (end < text.length) {
+        const next = text.codePointAt(end)!;
+        const nextCh = String.fromCodePoint(next);
+        if (!(isInvisibleChar(nextCh) || isVariationSelector(next)) || inWord(end)) break;
+        end += next > 0xffff ? 2 : 1;
+      }
+
+      // A run touching a symbol is part of a sequence, not a payload: emoji ZWJ
+      // sequences, the England-flag tag sequence, ❤️, and keycaps all look like
+      // this. Only runs with no symbol on either side are reported.
+      const before = i > 0 ? charBefore(text, i) : '';
+      const after = end < text.length ? String.fromCodePoint(text.codePointAt(end)!) : '';
+      const inSequence =
+        (before !== '' && SEQUENCE_NEIGHBOUR_RE.test(before)) ||
+        (after !== '' && SEQUENCE_NEIGHBOUR_RE.test(after));
+      if (!inSequence) {
+        signals.invisible = true;
+        words.push({
+          word: text.slice(i, end),
+          index: i,
+          signals: ['invisible'],
+          scripts: [],
+        });
+        replacements.push({ start: i, end, value: '' });
+      }
+      i = end;
     }
   }
 

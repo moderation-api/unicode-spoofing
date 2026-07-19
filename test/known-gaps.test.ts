@@ -97,3 +97,38 @@ describe('known gap: standalone whole-script confusables (no caller context)', (
     expect(flagged('аррӏе')).toBe(true);
   });
 });
+
+/* ---------------------------------------------------------------------------
+ * Gaps surfaced by porting the out-of-character corpus (see invisible.test.ts).
+ * Everything else that corpus covers is now handled and lives in the main suite.
+ * ------------------------------------------------------------------------- */
+
+describe('known gap: the Unicode whitespace family', () => {
+  // NOT a bug we intend to fix — recorded here because the out-of-character
+  // corpus covers it and the omission is deliberate.
+  //
+  // These render as a space and ARE whitespace (White_Space=Yes), so every
+  // JS `\s`, `String.split()` and tokenizer already treats them as a word
+  // break; they cost an attacker nothing and gain them nothing. They are also
+  // ordinary typography: U+00A0 in HTML, U+202F in French punctuation, U+3000
+  // in CJK text, U+2009 in typeset prose. Flagging them would produce constant
+  // false positives on legitimate content.
+  //
+  // The blank glyphs that are NOT whitespace — Hangul fillers, braille blank —
+  // are the ones an attacker can actually hide behind, and those ARE flagged
+  // (see invisible.test.ts).
+  const WHITESPACE: [string, number][] = [
+    ['OGHAM SPACE MARK', 0x1680],
+    ['EN QUAD', 0x2000],
+    ['EM SPACE', 0x2003],
+    ['THIN SPACE', 0x2009],
+    ['HAIR SPACE', 0x200a],
+    ['NARROW NO-BREAK SPACE', 0x202f],
+    ['MEDIUM MATHEMATICAL SPACE', 0x205f],
+    ['IDEOGRAPHIC SPACE', 0x3000],
+  ];
+
+  it.each(WHITESPACE)('flags %s as a word separator', (_name, cp) => {
+    expect(flagged(`free${String.fromCodePoint(cp)}money`)).toBe(true);
+  });
+});
