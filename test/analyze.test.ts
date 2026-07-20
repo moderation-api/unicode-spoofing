@@ -108,6 +108,12 @@ describe('analyze — legitimate content', () => {
     ['Persian with ZWNJ', 'می‌خواهم بروم'],
     ['emoji ZWJ sequences', 'family 👨‍👩‍👧‍👦 emoji ✌🏻'],
     ['numbers and symbols', 'Call +1 555-0100 re: 20MM+ ARR'],
+    // U+2019 is a token character, so contractions are ASCII words carrying one
+    // curly apostrophe — their skeleton folds it back to "'", which must not
+    // read as a disguised ASCII word.
+    ['typographic apostrophes', 'Sounds good, I’ll call — don’t worry, it’s Kaysie’s job.'],
+    ['& apos; in HTML', 'Sounds good, I&#39;ll call — don&#39;t worry, it&#39;s Kaysie&#39;s job.'],
+    ['test', 'Hansen&sons'],
     ['empty string', ''],
   ];
 
@@ -117,6 +123,13 @@ describe('analyze — legitimate content', () => {
     expect(r.words).toEqual([]);
     expect(r.changed).toBe(false);
     expect(r.normalized).toBe(text);
+  });
+
+  it('still flags a lookalike word that carries a curly apostrophe', () => {
+    // The apostrophe exemption is about punctuation only — the letters still
+    // decide. "Ivаn’s" hides a Cyrillic "а".
+    const r = analyze('Ivа’s');
+    expect(r.signals.mixed_script).toBe(true);
   });
 
   it('does not call a styled word confusable unless the whole word folds to ASCII', () => {

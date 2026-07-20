@@ -20,6 +20,18 @@ const ASCII_PRINTABLE_RE = /^[\x20-\x7e]+$/;
 const ASCII_LETTER_RE = /[a-zA-Z]/;
 
 /**
+ * TOKEN_RE deliberately keeps U+2019 inside words so contractions tokenize
+ * whole. That one character is enough to make an otherwise plain-ASCII word
+ * non-ASCII — and its skeleton folds straight back to "'", so "I’ll" would
+ * read as an ASCII word in disguise. Judge a token's ASCII-ness against its
+ * straight-apostrophe form so ordinary typographic punctuation is not evidence.
+ */
+const TYPOGRAPHIC_APOSTROPHE_RE = /’/g;
+function isAsciiWord(token: string): boolean {
+  return ASCII_PRINTABLE_RE.test(token.replace(TYPOGRAPHIC_APOSTROPHE_RE, "'"));
+}
+
+/**
  * Characters adjacent to which an invisible run is legitimate: emoji and other
  * symbols build their sequences out of ZWJ, variation selectors and tag
  * characters, and enclosing marks build keycaps. Used only by the standalone
@@ -235,7 +247,7 @@ function analyzeToken(
   //    OUTSIDE them — a whole word in an unexpected script is spoof evidence
   //    on its own, no Latin context needed.
   let skeletonConfusable = false;
-  if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
+  if (!mixed && letters.length >= 2 && !isAsciiWord(token)) {
     const inExpectedScript = scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
     const latinContext =
       dominantScript === 'Latin' ||
@@ -261,7 +273,7 @@ function analyzeToken(
   // context or expectedScripts. Requiring at least two styled LETTERS keeps
   // isolated compatibility symbols used in real text (m², №, ½, ℃, Ⅳ) out.
   let styledConfusable = false;
-  if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
+  if (!mixed && letters.length >= 2 && !isAsciiWord(token)) {
     const styledLetters = letters.filter((ch) => {
       const nf = ch.normalize('NFKC');
       return nf !== ch && ASCII_PRINTABLE_RE.test(nf) && ASCII_LETTER_RE.test(nf);
