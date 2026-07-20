@@ -44,6 +44,7 @@ r.signals;
 //   invisible: false,
 //   zalgo: false,
 //   illegal: false,
+//   encoding_damage: false,
 // }
 
 r.words;
@@ -75,12 +76,33 @@ a stray NUL byte:
 ```ts
 const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
 
-r.signals; // every one of the five is true
+r.signals; // every spoofing signal is true
 r.normalized; // 'HOT business: free crypto'
 r.counts; // { wordsTotal: 4, wordsAffected: 5 }
 
 skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
 ```
+
+### Broken text is not an attack
+
+`encoding_damage` is the one signal that does **not** set `spoofed`. U+FFFD is
+what a decoder emits when handed bytes it cannot read — a name mangled
+somewhere upstream, not a disguise:
+
+```ts
+const r = analyze('Hi Jos�� Luis, your appointment is confirmed.');
+
+r.signals.encoding_damage; // true
+r.spoofed; // false  <- a broken pipeline, not an attacker
+r.changed; // false  <- left alone, not silently "repaired"
+```
+
+The distinction is deliberate, and it is safe to make: whatever those bytes
+were, the decoder already destroyed them, so no payload can survive inside a
+U+FFFD for an attacker to exploit. Nothing is hidden from you — the signal and
+its word findings are still reported, so you can alert on data quality without
+it counting as a spoofing verdict. Collapsing the two means every mojibake'd
+`José` reads as an attack.
 
 ## What it catches
 
@@ -189,7 +211,8 @@ analyze('Ship it 🎉 👨\u200D👩\u200D👧 ℹ\uFE0F').spoofed; // false —
 | `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓`        |
 | `invisible`       | Characters that render as nothing, in or between words               | zero-width, bidi, tag chars, fillers  |
 | `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
-| `illegal`         | Control, non-character, or replacement code points anywhere in text  | `NUL`, `U+FFFE`, `U+FFFD`             |
+| `illegal`         | Control or non-character code points anywhere in text                | `NUL`, `U+0085`, `U+FFFE`             |
+| `encoding_damage` | Decode damage — reported, but never sets `spoofed` (see above)        | `Jos��` (a mangled `José`)            |
 
 What `invisible` covers: format characters (zero-width space/joiner, word
 joiner, …), bidi controls incl. the Trojan Source overrides, tag characters,
@@ -204,7 +227,7 @@ against a name instead of a hardcoded string.
 
 | Export                           | What it is                                                                                            |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `SPOOF_SIGNALS`                  | All five signal names — the keys of `result.signals`                                                  |
+| `SPOOF_SIGNALS`                  | All six signal names — the keys of `result.signals`                                                  |
 | `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
 | `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
 | `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |

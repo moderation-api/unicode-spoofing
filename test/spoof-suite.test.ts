@@ -652,8 +652,36 @@ describe('control & non-character code points', () => {
     expect(sig(run('x￾y'))).toBe(true);
   });
 
-  it('flags the object-replacement / replacement char (U+FFFD)', () => {
-    expect(sig(run('data�'))).toBe(true);
+  it('reports the replacement char (U+FFFD) as encoding damage, not spoofing', () => {
+    // Deliberate exception to this section's rule. U+FFFD is emitted by a
+    // decoder handed bytes it could not read, so it evidences a broken pipeline
+    // rather than an author's intent — and the original bytes are already gone,
+    // so it can carry no payload. It is still reported; it just is not spoofing.
+    const r = analyze('data�');
+    expect(r.signals.encoding_damage).toBe(true);
+    expect(r.words.map((w) => w.signals).flat()).toContain('encoding_damage');
+    expect(sig(r)).toBe(false);
+  });
+
+  it('leaves the replacement char in place rather than silently repairing it', () => {
+    const r = analyze('Jos�� Luis');
+    expect(r.normalized).toBe('Jos�� Luis');
+    expect(r.changed).toBe(false);
+  });
+
+  it('does not let decode damage mask a real spoof in the same message', () => {
+    // The dangerous direction: a corrupted message that ALSO carries a genuine
+    // lookalike must still be spoofed. Damage suppresses nothing but itself.
+    // 'раураl' is Cyrillic except its final Latin 'l', so it reports as
+    // mixed_script rather than confusable_word.
+    const r = analyze('Hi Jos��, verify your раураl account');
+    expect(r.signals.encoding_damage).toBe(true);
+    expect(r.signals.mixed_script).toBe(true);
+    expect(r.spoofed).toBe(true);
+    // Each is its own finding — the damage does not absorb the spoof.
+    expect(r.words.map((w) => w.signals)).toEqual([['encoding_damage'], ['mixed_script']]);
+    // The spoof is still resolved; the damage is still left alone.
+    expect(r.normalized).toBe('Hi Jos��, verify your paypal account');
   });
 
   it('does NOT flag ordinary newlines/tabs in multi-line text', () => {

@@ -1,6 +1,12 @@
 import { foldChar, skeleton } from './confusables';
 import { analyzeWordScripts, primaryScript, type PseudoScript, type ScriptName } from './scripts';
-import type { AnalysisResult, AnalyzeOptions, SpoofSignal, WordFinding } from './types';
+import {
+  SPOOFING_SIGNALS,
+  type AnalysisResult,
+  type AnalyzeOptions,
+  type SpoofSignal,
+  type WordFinding,
+} from './types';
 
 /**
  * Tokens are runs of letters, marks, digits, format (invisible) characters,
@@ -139,8 +145,10 @@ export const ZALGO_MARK_RUN = 3;
  * Code points that have no business appearing in ordinary text and that the
  * token scanner would otherwise silently drop (they are not letters, marks,
  * numbers or format characters, so they never enter a word): C0/C1 controls,
- * DEL, Unicode non-characters and the replacement character. TAB, LF and CR
- * are the only C0 controls treated as legitimate whitespace.
+ * DEL and Unicode non-characters. TAB, LF and CR are the only C0 controls
+ * treated as legitimate whitespace.
+ *
+ * U+FFFD is NOT here — see `isEncodingDamage`.
  */
 function isIllegalCodePoint(cp: number): boolean {
   if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false; // TAB, LF, CR
@@ -148,8 +156,23 @@ function isIllegalCodePoint(cp: number): boolean {
   if (cp >= 0x7f && cp <= 0x9f) return true; // DEL + C1 controls
   if (cp >= 0xfdd0 && cp <= 0xfdef) return true; // non-characters (BMP block)
   if ((cp & 0xfffe) === 0xfffe) return true; // U+xxFFFE / U+xxFFFF in every plane
-  if (cp === 0xfffd) return true; // replacement character (mojibake / decode damage)
   return false;
+}
+
+/**
+ * U+FFFD REPLACEMENT CHARACTER: a decoder emitted this because bytes it was
+ * handed were not valid in the encoding it assumed — "José" arriving as
+ * "Jos��". It reports a broken pipeline upstream, never intent:
+ * whatever the original bytes were, they are gone by the time this character
+ * exists, so no payload survives inside it for an attacker to exploit. That is
+ * what makes it safe to report without calling the text spoofed, and it is why
+ * this is a separate signal rather than an exemption inside `illegal`.
+ *
+ * It is also left in place by the normalizer. Stripping it would silently
+ * repair a corrupted message into one that reads as intact.
+ */
+function isEncodingDamage(cp: number): boolean {
+  return cp === 0xfffd;
 }
 
 /**
@@ -169,6 +192,7 @@ function emptySignals(): Record<SpoofSignal, boolean> {
     invisible: false,
     zalgo: false,
     illegal: false,
+    encoding_damage: false,
   };
 }
 
@@ -445,6 +469,19 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
     i += width;
   }
 
+  // Decode damage. A run reports as ONE finding: a single destroyed character
+  // usually yields several U+FFFDs (a two-byte "é" becomes two), and per-code-
+  // point findings would overstate how much of the text is broken. Nothing is
+  // replaced — see `isEncodingDamage`.
+  for (let i = 0; i < text.length; i += 1) {
+    if (!isEncodingDamage(text.charCodeAt(i))) continue;
+    let end = i + 1;
+    while (end < text.length && isEncodingDamage(text.charCodeAt(end))) end += 1;
+    signals.encoding_damage = true;
+    words.push({ word: text.slice(i, end), index: i, signals: ['encoding_damage'], scripts: [] });
+    i = end - 1;
+  }
+
   // Compatibility-styled letter runs the token scanner skips because the glyphs
   // are symbols, not letters (category So): circled "Ⓐⓓⓜⓘⓝ", parenthesized,
   // squared. A run of >=2 such glyphs whose NFKC form is an ASCII word is the
@@ -520,7 +557,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   }
 
   return {
-    spoofed: words.length > 0,
+    spoofed: SPOOFING_SIGNALS.some((s) => signals[s]),
     signals,
     words,
     counts: {

@@ -12,6 +12,7 @@ export {
 } from './scripts';
 export {
   SPOOF_SIGNALS,
+  SPOOFING_SIGNALS,
   type AnalysisResult,
   type AnalyzeOptions,
   type SpoofSignal,

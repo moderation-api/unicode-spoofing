@@ -1,6 +1,12 @@
 import type { ScriptName } from './scripts';
 
-export type SpoofSignal = 'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo' | 'illegal';
+export type SpoofSignal =
+  | 'mixed_script'
+  | 'confusable_word'
+  | 'invisible'
+  | 'zalgo'
+  | 'illegal'
+  | 'encoding_damage';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'mixed_script',
@@ -8,7 +14,18 @@ export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'invisible',
   'zalgo',
   'illegal',
+  'encoding_damage',
 ];
+
+/**
+ * Signals that assert *intent* — someone disguised this text. `encoding_damage`
+ * is deliberately absent: U+FFFD is a decoder's output, not an author's input,
+ * so it evidences a broken pipeline rather than an attacker. It is reported,
+ * but it does not make a result `spoofed`.
+ */
+export const SPOOFING_SIGNALS: readonly SpoofSignal[] = SPOOF_SIGNALS.filter(
+  (s) => s !== 'encoding_damage',
+);
 
 export interface WordFinding {
   /**
@@ -40,7 +57,10 @@ export interface AnalyzeOptions {
 }
 
 export interface AnalysisResult {
-  /** True when any signal fired. */
+  /**
+   * True when any *spoofing* signal fired. `encoding_damage` alone does not
+   * set this: broken text is a data-quality problem, not an attack.
+   */
   spoofed: boolean;
   /** Which signals fired anywhere in the text. */
   signals: Record<SpoofSignal, boolean>;
