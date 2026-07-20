@@ -5,12 +5,16 @@
  */
 
 /**
- * Script names tested in order when classifying a character; common scripts
- * first so the average lookup terminates early. This list only needs to cover
- * scripts we can *name* — characters outside it classify as `Unknown`, which
- * the analyzer treats conservatively (never as spoofing evidence).
+ * Every script the classifier can name, tested in order when classifying a
+ * character; common scripts first so the average lookup terminates early. This
+ * list only needs to cover scripts we can *name* — characters outside it
+ * classify as `Unknown`, which the analyzer treats conservatively (never as
+ * spoofing evidence).
+ *
+ * These are the exact values that appear in `WordFinding.scripts`,
+ * `AnalysisResult.dominantScript` and `AnalyzeOptions.expectedScripts`.
  */
-const SCRIPT_NAMES = [
+export const SCRIPT_NAMES = [
   'Latin',
   'Cyrillic',
   'Greek',
@@ -75,9 +79,24 @@ const SCRIPT_NAMES = [
   // Named so its invisible vowel sign (U+110B1) is recognised as native
   // orthography rather than as a hidden character. See INVISIBLE_MARKS.
   'Kaithi',
-];
+] as const;
 
-const scriptRegexes: Array<{ name: string; re: RegExp }> = [];
+/** A script the classifier can name — one of {@link SCRIPT_NAMES}. */
+export type ScriptName = (typeof SCRIPT_NAMES)[number];
+
+/**
+ * Classifications that are not scripts: `Common` (punctuation, digits, symbols
+ * shared by every script), `Inherited` (combining marks that take their script
+ * from the base) and `Unknown` (a script outside {@link SCRIPT_NAMES}). The
+ * analyzer treats all three as wildcards, never as spoofing evidence, and they
+ * never appear in a finding's `scripts`.
+ */
+export const PSEUDO_SCRIPTS = ['Common', 'Inherited', 'Unknown'] as const;
+
+/** One of {@link PSEUDO_SCRIPTS}. */
+export type PseudoScript = (typeof PSEUDO_SCRIPTS)[number];
+
+const scriptRegexes: Array<{ name: ScriptName; re: RegExp }> = [];
 for (const name of SCRIPT_NAMES) {
   try {
     scriptRegexes.push({ name, re: new RegExp(`\\p{Script=${name}}`, 'u') });
@@ -86,21 +105,29 @@ for (const name of SCRIPT_NAMES) {
   }
 }
 
+/**
+ * The subset of {@link SCRIPT_NAMES} this runtime's Unicode tables actually
+ * support. Older engines lack the newest scripts (Adlam, Osage …); characters
+ * in a missing script classify as `Unknown`. Equals `SCRIPT_NAMES` on any
+ * current Node or browser.
+ */
+export const SUPPORTED_SCRIPTS: readonly ScriptName[] = scriptRegexes.map((r) => r.name);
+
 const COMMON_RE = /\p{Script=Common}/u;
 const INHERITED_RE = /\p{Script=Inherited}/u;
 
-const primaryCache = new Map<number, string>();
+const primaryCache = new Map<number, ScriptName | PseudoScript>();
 
 /**
- * Primary script of a character: a name from SCRIPT_NAMES, or the pseudo
- * values 'Common', 'Inherited', 'Unknown'.
+ * Primary script of a character: a name from {@link SCRIPT_NAMES}, or one of
+ * the {@link PSEUDO_SCRIPTS} (`Common`, `Inherited`, `Unknown`).
  */
-export function primaryScript(ch: string): string {
+export function primaryScript(ch: string): ScriptName | PseudoScript {
   const cp = ch.codePointAt(0)!;
   const cached = primaryCache.get(cp);
   if (cached !== undefined) return cached;
 
-  let result = 'Unknown';
+  let result: ScriptName | PseudoScript = 'Unknown';
   if (COMMON_RE.test(ch)) result = 'Common';
   else if (INHERITED_RE.test(ch)) result = 'Inherited';
   else {
@@ -145,9 +172,10 @@ export function inScriptExtensions(ch: string, script: string): boolean {
 /**
  * Script combinations that legitimately mix inside a single word, per the
  * UTS #39 "augmented script set" idea: Japanese (Han + kana), Korean
- * (Han + Hangul), and Bopomofo-annotated Chinese.
+ * (Han + Hangul), and Bopomofo-annotated Chinese. A word whose scripts all fall
+ * within one of these is never reported as `mixed_script`.
  */
-const LEGITIMATE_COMBINATIONS: string[][] = [
+export const LEGITIMATE_SCRIPT_COMBINATIONS: readonly (readonly ScriptName[])[] = [
   ['Han', 'Hiragana', 'Katakana'],
   ['Han', 'Hangul'],
   ['Han', 'Bopomofo'],
@@ -162,10 +190,10 @@ const LEGITIMATE_COMBINATIONS: string[][] = [
  * when its scripts form a legitimate combination (e.g. Japanese).
  */
 export function analyzeWordScripts(letters: string[]): {
-  scripts: string[];
+  scripts: ScriptName[];
   mixed: boolean;
 } {
-  const scripts = new Set<string>();
+  const scripts = new Set<ScriptName>();
   for (const ch of letters) {
     const s = primaryScript(ch);
     if (s !== 'Common' && s !== 'Inherited' && s !== 'Unknown') scripts.add(s);
@@ -173,7 +201,7 @@ export function analyzeWordScripts(letters: string[]): {
   const list = [...scripts];
   if (list.length <= 1) return { scripts: list, mixed: false };
 
-  if (LEGITIMATE_COMBINATIONS.some((combo) => list.every((s) => combo.includes(s)))) {
+  if (LEGITIMATE_SCRIPT_COMBINATIONS.some((combo) => list.every((s) => combo.includes(s)))) {
     return { scripts: list, mixed: false };
   }
 

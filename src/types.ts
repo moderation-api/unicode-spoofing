@@ -1,3 +1,5 @@
+import type { ScriptName } from './scripts';
+
 export type SpoofSignal = 'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo' | 'illegal';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
@@ -20,7 +22,7 @@ export interface WordFinding {
   /** Signals this token carries (a token can carry several). */
   signals: SpoofSignal[];
   /** Primary scripts of the token's letters, e.g. ['Latin', 'Cyrillic']. */
-  scripts: string[];
+  scripts: ScriptName[];
   /**
    * UTS #39 skeleton of the token — present when it drove a
    * mixed_script/confusable_word signal (what the token resolves to).
@@ -34,7 +36,7 @@ export interface AnalyzeOptions {
    * with genuine Russian traffic). Whole words written in an expected script
    * are never reported as confusable_word; intra-word mixing still is.
    */
-  expectedScripts?: string[];
+  expectedScripts?: readonly ScriptName[];
 }
 
 export interface AnalysisResult {
@@ -57,5 +59,5 @@ export interface AnalysisResult {
   /** True when `normalized` differs from the input. */
   changed: boolean;
   /** Most frequent primary script among the input's letters, if any. */
-  dominantScript: string | null;
+  dominantScript: ScriptName | null;
 }
