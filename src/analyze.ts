@@ -1,5 +1,5 @@
 import { foldChar, skeleton } from './confusables';
-import { analyzeWordScripts, primaryScript } from './scripts';
+import { analyzeWordScripts, primaryScript, type PseudoScript, type ScriptName } from './scripts';
 import type { AnalysisResult, AnalyzeOptions, SpoofSignal, WordFinding } from './types';
 
 /**
@@ -70,7 +70,12 @@ function isVariationSelector(cp: number): boolean {
  * channel ("ASCII smuggling"). Selectors on symbols (❤️, keycaps, ™️) are not
  * covered here at all: they never sit in a word.
  */
-const VARIATION_BASE_SCRIPTS = new Set(['Han', 'Hiragana', 'Katakana', 'Mongolian']);
+const VARIATION_BASE_SCRIPTS = new Set<ScriptName | PseudoScript>([
+  'Han',
+  'Hiragana',
+  'Katakana',
+  'Mongolian',
+]);
 
 /** A handful of characters are letters AND emoji — U+2139 "ℹ" is the common
  * one — so they take the emoji presentation selector legitimately. */
@@ -88,7 +93,7 @@ function isInvisibleChar(ch: string): boolean {
  * marks are part of normal orthography. Tokens whose letters touch these
  * scripts are exempt from the invisible and zalgo signals.
  */
-const FORMAT_CHAR_SCRIPTS = new Set([
+export const FORMAT_CHAR_SCRIPTS: readonly ScriptName[] = [
   'Arabic',
   'Syriac',
   'Nko',
@@ -111,10 +116,12 @@ const FORMAT_CHAR_SCRIPTS = new Set([
   'Tibetan',
   'Hebrew',
   'Kaithi',
-]);
+];
+
+const FORMAT_CHAR_SCRIPT_SET = new Set<ScriptName>(FORMAT_CHAR_SCRIPTS);
 
 /** Combining marks stacked deeper than this on one base = zalgo. */
-const ZALGO_MARK_RUN = 3;
+export const ZALGO_MARK_RUN = 3;
 
 /**
  * Code points that have no business appearing in ordinary text and that the
@@ -155,16 +162,16 @@ function emptySignals(): Record<SpoofSignal, boolean> {
 
 interface TokenAnalysis {
   signals: SpoofSignal[];
-  scripts: string[];
+  scripts: ScriptName[];
   skeleton?: string;
   normalized: string;
 }
 
 function analyzeToken(
   token: string,
-  dominantScript: string | null,
+  dominantScript: ScriptName | null,
   anyMixedInMessage: boolean,
-  expectedScripts: Set<string>,
+  expectedScripts: Set<ScriptName>,
 ): TokenAnalysis {
   const chars = [...token];
   // Blank glyphs are excluded before script analysis: a Hangul filler is a
@@ -181,7 +188,7 @@ function analyzeToken(
   }
 
   const { scripts, mixed } = analyzeWordScripts(letters);
-  const scriptExempt = scripts.some((s) => FORMAT_CHAR_SCRIPTS.has(s));
+  const scriptExempt = scripts.some((s) => FORMAT_CHAR_SCRIPT_SET.has(s));
 
   // invisible: characters that render as nothing inside a word of a script that
   // does not use them — format characters, blank glyphs, invisible marks, and
@@ -307,14 +314,14 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   const tokens = [...text.matchAll(TOKEN_RE)];
 
   // Dominant script: most frequent primary script across all letters.
-  const scriptCounts = new Map<string, number>();
+  const scriptCounts = new Map<ScriptName, number>();
   for (const ch of text) {
     if (!LETTER_RE.test(ch) || isInvisibleChar(ch)) continue;
     const s = primaryScript(ch);
     if (s === 'Common' || s === 'Inherited' || s === 'Unknown') continue;
     scriptCounts.set(s, (scriptCounts.get(s) ?? 0) + 1);
   }
-  let dominantScript: string | null = null;
+  let dominantScript: ScriptName | null = null;
   let dominantCount = 0;
   for (const [s, count] of scriptCounts) {
     if (count > dominantCount) {

@@ -197,6 +197,39 @@ blank-but-not-whitespace glyphs, invisible combining marks, and variation
 selectors on a base with no registered sequence — whether they sit inside a
 word or alone between punctuation.
 
+## Constants
+
+Every value the library reports is also exported, so rules can be written
+against a name instead of a hardcoded string.
+
+| Export                           | What it is                                                                                            |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `SPOOF_SIGNALS`                  | All five signal names — the keys of `result.signals`                                                  |
+| `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
+| `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
+| `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |
+| `FORMAT_CHAR_SCRIPTS`            | Scripts exempt from `invisible` and `zalgo`, because joiners and stacked marks are their orthography  |
+| `LEGITIMATE_SCRIPT_COMBINATIONS` | Script mixes that never fire `mixed_script` (Japanese, Korean, Bopomofo-annotated Chinese)            |
+| `ZALGO_MARK_RUN`                 | Combining marks per base at which `zalgo` fires                                                       |
+| `UNICODE_VERSION`, `DATA_DATE`   | Which UTS #39 confusables table is compiled in                                                        |
+
+`ScriptName` types all of these, so `expectedScripts` and any comparison
+against `dominantScript` is checked against the real list — a typo like
+`'Cyrilic'` will not compile.
+
+```ts
+import { analyze, SCRIPT_NAMES, type ScriptName } from '@moderation-api/unicode-spoofing';
+
+SCRIPT_NAMES.includes('Cyrillic'); // true — offer the real list in a settings UI
+
+const ALLOWED: ScriptName[] = ['Latin', 'Greek'];
+const { dominantScript } = analyze(userInput);
+if (dominantScript && !ALLOWED.includes(dominantScript)) routeToNativeReviewer(userInput);
+```
+
+`primaryScript(char)` is exported too, for classifying a single character
+yourself.
+
 ## Recipes
 
 **Run your existing filter against clean text.** `normalized` is the whole

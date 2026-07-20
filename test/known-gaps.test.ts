@@ -17,10 +17,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { analyze } from '../src';
+import { analyze, type ScriptName } from '../src';
 
 /** Was anything flagged? */
-const flagged = (input: string, expectedScripts?: string[]) =>
+const flagged = (input: string, expectedScripts?: ScriptName[]) =>
   analyze(input, expectedScripts ? { expectedScripts } : undefined).spoofed;
 
 describe('known gap: allowed multi-script combinations (UTS #39 augmented sets)', () => {

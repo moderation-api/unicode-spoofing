@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { analyze, skeleton } from '../src';
+import { analyze, SCRIPT_NAMES, skeleton, type ScriptName } from '../src';
 
 describe('README — usage', () => {
   it('resolves three styling systems in one sentence', () => {
@@ -180,5 +180,20 @@ describe('README — recipes', () => {
     const taken = new Set(['admin', 'moderator'].map(skeleton));
     expect(taken.has(skeleton('аdmin'))).toBe(true);
     expect(taken.has(skeleton('newcomer'))).toBe(false);
+  });
+});
+
+describe('README — constants', () => {
+  it('routes content whose dominant script is outside the allowed list', () => {
+    expect(SCRIPT_NAMES.includes('Cyrillic')).toBe(true);
+
+    const ALLOWED: ScriptName[] = ['Latin', 'Greek'];
+    const routed = (userInput: string) => {
+      const { dominantScript } = analyze(userInput);
+      return dominantScript !== null && !ALLOWED.includes(dominantScript);
+    };
+
+    expect(routed('Привет, как дела?')).toBe(true);
+    expect(routed('Hello there')).toBe(false);
   });
 });
