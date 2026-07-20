@@ -1,6 +1,6 @@
 {
   "name": "@moderation-api/unicode-spoofing",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Unicode spoofing detection: mixed-script words, UTS #39 confusables, invisible characters, and combining-mark abuse. Zero runtime dependencies.",
   "author": "Moderation API <support@moderationapi.com>",
   "license": "MIT",
