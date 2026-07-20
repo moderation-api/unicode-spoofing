@@ -1,5 +1,13 @@
 # @moderation-api/unicode-spoofing
 
+## 0.3.0
+
+### Minor Changes
+
+- [#14](https://github.com/moderation-api/unicode-spoofing/pull/14) [`86027a1`](https://github.com/moderation-api/unicode-spoofing/commit/86027a178a353937280240957d1cd1d662d64683) Thanks [@chrisdengso](https://github.com/chrisdengso)! - Export the constants behind the analysis, so callers can enumerate values instead of hardcoding strings: `SCRIPT_NAMES` (every script `dominantScript` and `words[].scripts` can report), `SUPPORTED_SCRIPTS`, `PSEUDO_SCRIPTS`, `FORMAT_CHAR_SCRIPTS`, `LEGITIMATE_SCRIPT_COMBINATIONS`, `ZALGO_MARK_RUN`, and the `primaryScript(char)` classifier.
+
+  Script-typed fields now use the new `ScriptName` union instead of `string`: `AnalysisResult.dominantScript`, `WordFinding.scripts` and `AnalyzeOptions.expectedScripts`. Runtime behavior is unchanged, but TypeScript callers passing a plain `string[]` to `expectedScripts` will need `ScriptName[]` — which is the point: `expectedScripts: ['Cyrilic']` no longer compiles.
+
 ## 0.2.0
 
 ### Minor Changes
