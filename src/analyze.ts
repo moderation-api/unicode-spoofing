@@ -373,7 +373,11 @@ function analyzeToken(
       return s === 'Latin' || s === 'Common' || s === 'Inherited' || s === 'Unknown';
     });
     const carriesRestricted = chars.some((ch) => isRestrictedIdentifierChar(ch));
-    if (!inExpectedScript && (latinContext || outsideExpected) && (!writtenInLatin || carriesRestricted)) {
+    if (
+      !inExpectedScript &&
+      (latinContext || outsideExpected) &&
+      (!writtenInLatin || carriesRestricted)
+    ) {
       const sk = skeleton(token);
       if (ASCII_PRINTABLE_RE.test(sk) && ASCII_LETTER_RE.test(sk)) {
         signals.push('confusable_word');

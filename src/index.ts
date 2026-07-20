@@ -1,9 +1,4 @@
-export {
-  analyze,
-  FORMAT_CHAR_SCRIPTS,
-  ZALGO_MARK_RUN,
-  ZERO_WIDTH_INERT_RUN,
-} from './analyze';
+export { analyze, FORMAT_CHAR_SCRIPTS, ZALGO_MARK_RUN, ZERO_WIDTH_INERT_RUN } from './analyze';
 export { skeleton } from './confusables';
 export { UNICODE_VERSION, DATA_DATE } from './data/confusables.generated';
 export {

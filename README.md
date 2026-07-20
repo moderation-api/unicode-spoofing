@@ -212,7 +212,7 @@ analyze('Ship it 🎉 👨\u200D👩\u200D👧 ℹ\uFE0F').spoofed; // false —
 | `invisible`       | Characters that render as nothing, in or between words               | zero-width, bidi, tag chars, fillers  |
 | `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
 | `illegal`         | Control or non-character code points anywhere in text                | `NUL`, `U+0085`, `U+FFFE`             |
-| `encoding_damage` | Decode damage — reported, but never sets `spoofed` (see above)        | `Jos��` (a mangled `José`)            |
+| `encoding_damage` | Decode damage — reported, but never sets `spoofed` (see above)       | `Jos��` (a mangled `José`)            |
 
 What `invisible` covers: format characters (zero-width space/joiner, word
 joiner, …), bidi controls incl. the Trojan Source overrides, tag characters,
@@ -227,7 +227,7 @@ against a name instead of a hardcoded string.
 
 | Export                           | What it is                                                                                            |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `SPOOF_SIGNALS`                  | All six signal names — the keys of `result.signals`                                                  |
+| `SPOOF_SIGNALS`                  | All six signal names — the keys of `result.signals`                                                   |
 | `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
 | `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
 | `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |

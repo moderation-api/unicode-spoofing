@@ -1,12 +1,7 @@
 import type { ScriptName } from './scripts';
 
 export type SpoofSignal =
-  | 'mixed_script'
-  | 'confusable_word'
-  | 'invisible'
-  | 'zalgo'
-  | 'illegal'
-  | 'encoding_damage';
+  'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo' | 'illegal' | 'encoding_damage';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'mixed_script',
