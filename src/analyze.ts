@@ -1,6 +1,13 @@
 import { foldChar, skeleton } from './confusables';
+import { isRestrictedIdentifierChar } from './identifier-status';
 import { analyzeWordScripts, primaryScript, type PseudoScript, type ScriptName } from './scripts';
-import type { AnalysisResult, AnalyzeOptions, SpoofSignal, WordFinding } from './types';
+import {
+  SPOOFING_SIGNALS,
+  type AnalysisResult,
+  type AnalyzeOptions,
+  type SpoofSignal,
+  type WordFinding,
+} from './types';
 
 /**
  * Tokens are runs of letters, marks, digits, format (invisible) characters,
@@ -18,6 +25,18 @@ const MARK_RE = /\p{M}/u;
 const FORMAT_RE = /\p{Cf}/u;
 const ASCII_PRINTABLE_RE = /^[\x20-\x7e]+$/;
 const ASCII_LETTER_RE = /[a-zA-Z]/;
+
+/**
+ * TOKEN_RE deliberately keeps U+2019 inside words so contractions tokenize
+ * whole. That one character is enough to make an otherwise plain-ASCII word
+ * non-ASCII — and its skeleton folds straight back to "'", so "I’ll" would
+ * read as an ASCII word in disguise. Judge a token's ASCII-ness against its
+ * straight-apostrophe form so ordinary typographic punctuation is not evidence.
+ */
+const TYPOGRAPHIC_APOSTROPHE_RE = /’/g;
+function isAsciiWord(token: string): boolean {
+  return ASCII_PRINTABLE_RE.test(token.replace(TYPOGRAPHIC_APOSTROPHE_RE, "'"));
+}
 
 /**
  * Characters adjacent to which an invisible run is legitimate: emoji and other
@@ -120,6 +139,61 @@ export const FORMAT_CHAR_SCRIPTS: readonly ScriptName[] = [
 
 const FORMAT_CHAR_SCRIPT_SET = new Set<ScriptName>(FORMAT_CHAR_SCRIPTS);
 
+/**
+ * Zero-width AND non-reordering: these render as nothing and move nothing.
+ * Deliberately excludes the other invisibles, which stay reportable wherever
+ * they sit — bidi controls reorder the line (Trojan Source), tag characters
+ * carry a payload (ASCII smuggling), and blank glyphs occupy space, so none of
+ * them are inert just because a space is next to them.
+ */
+const ZERO_WIDTH_CHARS = new Set([
+  0x200b, // ZERO WIDTH SPACE
+  0x200c, // ZERO WIDTH NON-JOINER
+  0x200d, // ZERO WIDTH JOINER
+  0x2060, // WORD JOINER
+  0xfeff, // ZERO WIDTH NO-BREAK SPACE
+]);
+
+/**
+ * Longest run of zero-width characters still treated as inert when it is
+ * isolated in whitespace. Each position in a run carries at least a bit, so a
+ * long run encodes a payload wherever it sits and is always reported.
+ */
+export const ZERO_WIDTH_INERT_RUN = 4;
+
+/**
+ * Marks zero-width runs that touch no text at all: whitespace (or a string
+ * boundary) on BOTH sides. Such a run splits no word and joins no token — it
+ * sits in a gap that already exists, so it changes neither what the text
+ * renders as nor how it tokenizes, and reporting it is noise.
+ *
+ * Requiring both sides is the whole safety of the rule. A run touching text on
+ * ONE side is still doing work: "admin<ZWSP>" renders as "admin" but compares
+ * unequal to it, and "<ZWSP>Valencia" glues to the front of a token the same
+ * way — both evade exact matching without splitting anything. Only complete
+ * isolation makes a zero-width run inert.
+ *
+ * Computed over the whole text because the judgement needs both neighbours,
+ * which neither the per-token nor the standalone pass can see on its own.
+ */
+function inertZeroWidthMask(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  for (let i = 0; i < text.length;) {
+    if (!ZERO_WIDTH_CHARS.has(text.charCodeAt(i))) {
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < text.length && ZERO_WIDTH_CHARS.has(text.charCodeAt(end))) end += 1;
+    // A string boundary counts as whitespace: there is no text on that side.
+    const isolated =
+      (i === 0 || /\s/.test(text[i - 1]!)) && (end === text.length || /\s/.test(text[end]!));
+    if (isolated && end - i <= ZERO_WIDTH_INERT_RUN) mask.fill(1, i, end);
+    i = end;
+  }
+  return mask;
+}
+
 /** Combining marks stacked deeper than this on one base = zalgo. */
 export const ZALGO_MARK_RUN = 3;
 
@@ -127,8 +201,10 @@ export const ZALGO_MARK_RUN = 3;
  * Code points that have no business appearing in ordinary text and that the
  * token scanner would otherwise silently drop (they are not letters, marks,
  * numbers or format characters, so they never enter a word): C0/C1 controls,
- * DEL, Unicode non-characters and the replacement character. TAB, LF and CR
- * are the only C0 controls treated as legitimate whitespace.
+ * DEL and Unicode non-characters. TAB, LF and CR are the only C0 controls
+ * treated as legitimate whitespace.
+ *
+ * U+FFFD is NOT here — see `isEncodingDamage`.
  */
 function isIllegalCodePoint(cp: number): boolean {
   if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false; // TAB, LF, CR
@@ -136,8 +212,23 @@ function isIllegalCodePoint(cp: number): boolean {
   if (cp >= 0x7f && cp <= 0x9f) return true; // DEL + C1 controls
   if (cp >= 0xfdd0 && cp <= 0xfdef) return true; // non-characters (BMP block)
   if ((cp & 0xfffe) === 0xfffe) return true; // U+xxFFFE / U+xxFFFF in every plane
-  if (cp === 0xfffd) return true; // replacement character (mojibake / decode damage)
   return false;
+}
+
+/**
+ * U+FFFD REPLACEMENT CHARACTER: a decoder emitted this because bytes it was
+ * handed were not valid in the encoding it assumed — "José" arriving as
+ * "Jos��". It reports a broken pipeline upstream, never intent:
+ * whatever the original bytes were, they are gone by the time this character
+ * exists, so no payload survives inside it for an attacker to exploit. That is
+ * what makes it safe to report without calling the text spoofed, and it is why
+ * this is a separate signal rather than an exemption inside `illegal`.
+ *
+ * It is also left in place by the normalizer. Stripping it would silently
+ * repair a corrupted message into one that reads as intact.
+ */
+function isEncodingDamage(cp: number): boolean {
+  return cp === 0xfffd;
 }
 
 /**
@@ -157,6 +248,7 @@ function emptySignals(): Record<SpoofSignal, boolean> {
     invisible: false,
     zalgo: false,
     illegal: false,
+    encoding_damage: false,
   };
 }
 
@@ -172,8 +264,21 @@ function analyzeToken(
   dominantScript: ScriptName | null,
   anyMixedInMessage: boolean,
   expectedScripts: Set<ScriptName>,
+  inertMask: Uint8Array,
+  tokenStart: number,
 ): TokenAnalysis {
   const chars = [...token];
+  // Aligned with `chars`, so the inert judgement — made over the whole text —
+  // is readable per code point here. Stepping by `ch.length` keeps astral
+  // characters from shifting the mapping into the UTF-16 mask.
+  const inertAt: boolean[] = [];
+  {
+    let offset = tokenStart;
+    for (const ch of chars) {
+      inertAt.push(inertMask[offset] === 1);
+      offset += ch.length;
+    }
+  }
   // Blank glyphs are excluded before script analysis: a Hangul filler is a
   // Hangul *letter* to the property tables, and counting it as one would report
   // "fr<filler>ee" as a Latin/Hangul mix rather than as a hidden character.
@@ -208,7 +313,8 @@ function analyzeToken(
     if (base === undefined || !LETTER_RE.test(base) || PICTOGRAPHIC_RE.test(base)) continue;
     if (!VARIATION_BASE_SCRIPTS.has(primaryScript(base))) strayVariation.add(i);
   }
-  const hasInvisible = chars.some((ch) => isInvisibleChar(ch)) || strayVariation.size > 0;
+  const hasInvisible =
+    chars.some((ch, i) => isInvisibleChar(ch) && !inertAt[i]) || strayVariation.size > 0;
   if (hasInvisible && !scriptExempt) signals.push('invisible');
 
   // zalgo: combining marks stacked beyond orthographic depth.
@@ -234,8 +340,23 @@ function analyzeToken(
   //    the caller declared the scripts they expect and this word is entirely
   //    OUTSIDE them — a whole word in an unexpected script is spoof evidence
   //    on its own, no Latin context needed.
+  //
+  // A word already written in Latin is the exception, and needs one more test.
+  // Cross-script evidence does not exist there — nothing is impersonating Latin
+  // because the word IS Latin — so all that remains is whether its skeleton
+  // happens to reach ASCII. That fires on ordinary European orthography:
+  // "Ægir" folds to "AEgir" and "ısıtır" to "isitir", both perfectly normal
+  // words. Worse, it does so arbitrarily — "æ" is a ligature so UTS #39
+  // dissolves it to "ae", while "ø" keeps its stroke as a combining mark and
+  // never reaches ASCII, so "Ægir" was reported and "Ålborg" was not.
+  //
+  // Identifier_Status draws the line Unicode intends for exactly this question:
+  // "æ ø å ß þ œ ı" are Allowed (letters of living alphabets), while "ɑ" (IPA
+  // alpha) and "ﬁ" (a compatibility ligature) are Restricted. Requiring a
+  // Restricted character keeps intra-Latin homoglyphs like "pɑypal" — which no
+  // script check can catch — without indicting every Danish surname.
   let skeletonConfusable = false;
-  if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
+  if (!mixed && letters.length >= 2 && !isAsciiWord(token)) {
     const inExpectedScript = scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
     const latinContext =
       dominantScript === 'Latin' ||
@@ -245,7 +366,18 @@ function analyzeToken(
       expectedScripts.size > 0 &&
       scripts.length > 0 &&
       scripts.every((s) => !expectedScripts.has(s));
-    if (!inExpectedScript && (latinContext || outsideExpected)) {
+    // Script-neutral characters (the ʻokina, digits) carry no script evidence
+    // either way, so a word of Latin + Common letters is still a Latin word.
+    const writtenInLatin = letters.every((ch) => {
+      const s = primaryScript(ch);
+      return s === 'Latin' || s === 'Common' || s === 'Inherited' || s === 'Unknown';
+    });
+    const carriesRestricted = chars.some((ch) => isRestrictedIdentifierChar(ch));
+    if (
+      !inExpectedScript &&
+      (latinContext || outsideExpected) &&
+      (!writtenInLatin || carriesRestricted)
+    ) {
       const sk = skeleton(token);
       if (ASCII_PRINTABLE_RE.test(sk) && ASCII_LETTER_RE.test(sk)) {
         signals.push('confusable_word');
@@ -261,7 +393,7 @@ function analyzeToken(
   // context or expectedScripts. Requiring at least two styled LETTERS keeps
   // isolated compatibility symbols used in real text (m², №, ½, ℃, Ⅳ) out.
   let styledConfusable = false;
-  if (!mixed && letters.length >= 2 && !ASCII_PRINTABLE_RE.test(token)) {
+  if (!mixed && letters.length >= 2 && !isAsciiWord(token)) {
     const styledLetters = letters.filter((ch) => {
       const nf = ch.normalize('NFKC');
       return nf !== ch && ASCII_PRINTABLE_RE.test(nf) && ASCII_LETTER_RE.test(nf);
@@ -287,7 +419,10 @@ function analyzeToken(
     const dropInvisible = signals.includes('invisible');
     normalized = chars
       .map((ch, i) => {
-        if (dropInvisible && (isInvisibleChar(ch) || strayVariation.has(i))) return '';
+        // Inert characters survive: they were not evidence, so removing them
+        // would edit the message without cause.
+        if (dropInvisible && ((isInvisibleChar(ch) && !inertAt[i]) || strayVariation.has(i)))
+          return '';
         if (zalgo && MARK_RE.test(ch)) return '';
         if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
@@ -340,10 +475,18 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   const signals = emptySignals();
   const words: WordFinding[] = [];
   const replacements: Array<{ start: number; end: number; value: string }> = [];
+  const inertMask = inertZeroWidthMask(text);
 
   for (const match of tokens) {
     const token = match[0];
-    const result = analyzeToken(token, dominantScript, anyMixedInMessage, expectedScripts);
+    const result = analyzeToken(
+      token,
+      dominantScript,
+      anyMixedInMessage,
+      expectedScripts,
+      inertMask,
+      match.index,
+    );
     if (result.signals.length === 0) continue;
 
     for (const s of result.signals) signals[s] = true;
@@ -382,7 +525,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       const cp = text.codePointAt(i)!;
       const width = cp > 0xffff ? 2 : 1;
       const ch = String.fromCodePoint(cp);
-      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i)) {
+      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i) || inertMask[i] === 1) {
         i += width;
         continue;
       }
@@ -393,6 +536,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
         const next = text.codePointAt(end)!;
         const nextCh = String.fromCodePoint(next);
         if (!(isInvisibleChar(nextCh) || isVariationSelector(next)) || inWord(end)) break;
+        if (inertMask[end] === 1) break;
         end += next > 0xffff ? 2 : 1;
       }
 
@@ -431,6 +575,19 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       replacements.push({ start: i, end: i + width, value: '' });
     }
     i += width;
+  }
+
+  // Decode damage. A run reports as ONE finding: a single destroyed character
+  // usually yields several U+FFFDs (a two-byte "é" becomes two), and per-code-
+  // point findings would overstate how much of the text is broken. Nothing is
+  // replaced — see `isEncodingDamage`.
+  for (let i = 0; i < text.length; i += 1) {
+    if (!isEncodingDamage(text.charCodeAt(i))) continue;
+    let end = i + 1;
+    while (end < text.length && isEncodingDamage(text.charCodeAt(end))) end += 1;
+    signals.encoding_damage = true;
+    words.push({ word: text.slice(i, end), index: i, signals: ['encoding_damage'], scripts: [] });
+    i = end - 1;
   }
 
   // Compatibility-styled letter runs the token scanner skips because the glyphs
@@ -508,7 +665,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   }
 
   return {
-    spoofed: words.length > 0,
+    spoofed: SPOOFING_SIGNALS.some((s) => signals[s]),
     signals,
     words,
     counts: {

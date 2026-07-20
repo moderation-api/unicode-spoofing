@@ -108,6 +108,13 @@ describe('analyze — legitimate content', () => {
     ['Persian with ZWNJ', 'می‌خواهم بروم'],
     ['emoji ZWJ sequences', 'family 👨‍👩‍👧‍👦 emoji ✌🏻'],
     ['numbers and symbols', 'Call +1 555-0100 re: 20MM+ ARR'],
+    // U+2019 is a token character, so contractions are ASCII words carrying one
+    // curly apostrophe — their skeleton folds it back to "'", which must not
+    // read as a disguised ASCII word.
+    ['typographic apostrophes', 'Sounds good, I’ll call — don’t worry, it’s Kaysie’s job.'],
+    ['& apos; in HTML', 'Sounds good, I&#39;ll call — don&#39;t worry, it&#39;s Kaysie&#39;s job.'],
+    ['test', 'Hansen&sons'],
+    ['danish name', "Hi Ægir, I hope you're well."],
     ['empty string', ''],
   ];
 
@@ -117,6 +124,49 @@ describe('analyze — legitimate content', () => {
     expect(r.words).toEqual([]);
     expect(r.changed).toBe(false);
     expect(r.normalized).toBe(text);
+  });
+
+  it('still flags a lookalike word that carries a curly apostrophe', () => {
+    // The apostrophe exemption is about punctuation only — the letters still
+    // decide. "Ivаn’s" hides a Cyrillic "а".
+    const r = analyze('Ivа’s');
+    expect(r.signals.mixed_script).toBe(true);
+  });
+
+  // A word already written in Latin cannot be impersonating Latin, so the only
+  // thing the skeleton test measures there is whether the fold happens to reach
+  // ASCII — which it does for ordinary European letters, and arbitrarily: "æ"
+  // is a ligature and dissolves to "ae", while "ø" keeps its stroke as a
+  // combining mark and never gets there. Identifier_Status replaces that coin
+  // flip with the distinction Unicode defines for the purpose.
+  describe('Latin words are judged on Identifier_Status, not skeleton luck', () => {
+    it.each([
+      ['Nordic ligature and stroke alike', 'Ægir sailed to Ålborg'],
+      ['thorn and eth', 'Þór og Ðagur'],
+      ['German sharp s', 'Straße und Größe'],
+      ['French ligature', 'Le cœur et la sœur'],
+      ['Turkish dotless i', 'Işık ılık ısıtır'],
+      ['Hawaiian ʻokina', 'Hawaiʻi and Oʻahu'],
+      ['a name mangled by a codepage swap', 'offer for Ayalaæs Lashes'],
+    ])('leaves %s alone', (_name, text) => {
+      expect(analyze(text).spoofed).toBe(false);
+    });
+
+    it('still catches an intra-Latin homoglyph, which no script check can see', () => {
+      // U+0251 LATIN SMALL LETTER ALPHA is Latin script — mixed_script and the
+      // cross-script skeleton path are both blind to it. Identifier_Status
+      // marks it Restricted, which is the only thing separating it from "æ".
+      const r = analyze('Verify your pɑypal account');
+      expect(r.signals.confusable_word).toBe(true);
+      expect(r.normalized).toBe('Verify your paypal account');
+    });
+
+    it('does not weaken the cross-script case, where letters are Allowed too', () => {
+      // Cyrillic "а"/"о" are Allowed — they are ordinary Russian. The gate must
+      // apply ONLY to Latin words, or "раураl" would walk straight through.
+      expect(analyze('Verify your раураl account').spoofed).toBe(true);
+      expect(analyze('НОТ deal today').spoofed).toBe(true);
+    });
   });
 
   it('does not call a styled word confusable unless the whole word folds to ASCII', () => {

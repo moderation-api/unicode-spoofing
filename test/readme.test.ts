@@ -22,6 +22,7 @@ describe('README — usage', () => {
       invisible: false,
       zalgo: false,
       illegal: false,
+      encoding_damage: false,
     });
     expect(r.words.map((w) => ({ word: w.word, index: w.index, skeleton: w.skeleton }))).toEqual([
       { word: 'Ｇｅｔ', index: 0, skeleton: 'Get' },
@@ -46,7 +47,7 @@ describe('README — usage', () => {
     expect(analyze('Verify your раураl account').normalized).toBe('Verify your paypal account');
   });
 
-  it('carries all five signals at once', () => {
+  it('carries every spoofing signal at once', () => {
     const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
 
     expect(r.signals).toEqual({
@@ -55,11 +56,20 @@ describe('README — usage', () => {
       invisible: true,
       zalgo: true,
       illegal: true,
+      encoding_damage: false,
     });
     expect(r.normalized).toBe('HOT business: free crypto');
     expect(r.counts).toEqual({ wordsTotal: 4, wordsAffected: 5 });
 
     expect(skeleton('раураl') === skeleton('paypal')).toBe(true);
+  });
+
+  it('reports decode damage without calling it spoofed', () => {
+    const r = analyze('Hi Jos�� Luis, your appointment is confirmed.');
+
+    expect(r.signals.encoding_damage).toBe(true);
+    expect(r.spoofed).toBe(false);
+    expect(r.changed).toBe(false);
   });
 });
 

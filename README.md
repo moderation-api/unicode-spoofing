@@ -15,8 +15,8 @@ you the de-obfuscated text back.
 
 Zero runtime dependencies. Script classification rides the JS engine's own
 Unicode property tables (`\p{Script=…}`); the only shipped data is the
-UTS #39 confusables table, generated from the Unicode Consortium's
-`confusables.txt` and pinned to a Unicode version.
+UTS #39 security tables, generated from the Unicode Consortium's
+`confusables.txt` and `IdentifierStatus.txt` and pinned to a Unicode version.
 
 Ships as dual ESM/CommonJS with bundled type declarations. Node 20+.
 
@@ -44,6 +44,7 @@ r.signals;
 //   invisible: false,
 //   zalgo: false,
 //   illegal: false,
+//   encoding_damage: false,
 // }
 
 r.words;
@@ -75,12 +76,33 @@ a stray NUL byte:
 ```ts
 const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
 
-r.signals; // every one of the five is true
+r.signals; // every spoofing signal is true
 r.normalized; // 'HOT business: free crypto'
 r.counts; // { wordsTotal: 4, wordsAffected: 5 }
 
 skeleton('раураl') === skeleton('paypal'); // true (UTS #39 comparison)
 ```
+
+### Broken text is not an attack
+
+`encoding_damage` is the one signal that does **not** set `spoofed`. U+FFFD is
+what a decoder emits when handed bytes it cannot read — a name mangled
+somewhere upstream, not a disguise:
+
+```ts
+const r = analyze('Hi Jos�� Luis, your appointment is confirmed.');
+
+r.signals.encoding_damage; // true
+r.spoofed; // false  <- a broken pipeline, not an attacker
+r.changed; // false  <- left alone, not silently "repaired"
+```
+
+The distinction is deliberate, and it is safe to make: whatever those bytes
+were, the decoder already destroyed them, so no payload can survive inside a
+U+FFFD for an attacker to exploit. Nothing is hidden from you — the signal and
+its word findings are still reported, so you can alert on data quality without
+it counting as a spoofing verdict. Collapsing the two means every mojibake'd
+`José` reads as an attack.
 
 ## What it catches
 
@@ -189,7 +211,8 @@ analyze('Ship it 🎉 👨\u200D👩\u200D👧 ℹ\uFE0F').spoofed; // false —
 | `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓`        |
 | `invisible`       | Characters that render as nothing, in or between words               | zero-width, bidi, tag chars, fillers  |
 | `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
-| `illegal`         | Control, non-character, or replacement code points anywhere in text  | `NUL`, `U+FFFE`, `U+FFFD`             |
+| `illegal`         | Control or non-character code points anywhere in text                | `NUL`, `U+0085`, `U+FFFE`             |
+| `encoding_damage` | Decode damage — reported, but never sets `spoofed` (see above)       | `Jos��` (a mangled `José`)            |
 
 What `invisible` covers: format characters (zero-width space/joiner, word
 joiner, …), bidi controls incl. the Trojan Source overrides, tag characters,
@@ -204,7 +227,7 @@ against a name instead of a hardcoded string.
 
 | Export                           | What it is                                                                                            |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `SPOOF_SIGNALS`                  | All five signal names — the keys of `result.signals`                                                  |
+| `SPOOF_SIGNALS`                  | All six signal names — the keys of `result.signals`                                                   |
 | `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
 | `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
 | `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |
@@ -212,6 +235,7 @@ against a name instead of a hardcoded string.
 | `LEGITIMATE_SCRIPT_COMBINATIONS` | Script mixes that never fire `mixed_script` (Japanese, Korean, Bopomofo-annotated Chinese)            |
 | `ZALGO_MARK_RUN`                 | Combining marks per base at which `zalgo` fires                                                       |
 | `UNICODE_VERSION`, `DATA_DATE`   | Which UTS #39 confusables table is compiled in                                                        |
+| `ZERO_WIDTH_INERT_RUN`           | Longest zero-width run still treated as inert when isolated in whitespace                             |
 
 `ScriptName` types all of these, so `expectedScripts` and any comparison
 against `dominantScript` is checked against the real list — a typo like
@@ -263,6 +287,15 @@ analyze(text, { expectedScripts: ['Cyrillic'] }); // real Russian traffic
   is Latin-dominant, other words already mix scripts, or the word's own script
   is Latin) **and** when the full UTS #39 skeleton lands in ASCII. Real words
   like `привет` contain letters with no ASCII prototype and pass through.
+- A word already written in Latin needs a UTS #39 **Restricted** character
+  before its skeleton counts. Nothing there is impersonating Latin — the word
+  IS Latin — so the skeleton test alone just asks whether the fold happens to
+  reach ASCII, which it does for ordinary European letters and does so
+  arbitrarily: `æ` is a ligature and dissolves to `ae`, while `ø` keeps its
+  stroke as a combining mark and never gets there. `Ægir`, `Þór`, `Straße`,
+  `cœur`, `ısıtır` and `Hawaiʻi` are all Allowed and pass through; `pɑypal`
+  (U+0251 IPA ALPHA) is Restricted and is still caught — an intra-Latin
+  homoglyph no script comparison can see.
 - `expectedScripts: ['Cyrillic']` marks scripts as normal for the caller's
   traffic — whole words in them are never flagged; intra-word mixing still is.
   Declaring it also sharpens detection the other way: a whole word written
@@ -299,8 +332,8 @@ platform is the rest of the answer.
 
 ## Credits
 
-- Confusables data comes from the Unicode Consortium's
-  [UTS #39](https://www.unicode.org/reports/tr39/) security tables.
+- Confusables and Identifier_Status data both come from the Unicode
+  Consortium's [UTS #39](https://www.unicode.org/reports/tr39/) security tables.
 
 ## Updating the Unicode data
 
@@ -308,6 +341,8 @@ platform is the rest of the answer.
 npm run generate:data                                            # latest
 node scripts/generate-confusables.mjs --version 17.0.0          # pinned
 node scripts/generate-confusables.mjs --file confusables.txt    # offline
+
+node scripts/generate-identifier-status.mjs                     # Identifier_Status
 ```
 
 .github/workflows/update-unicode-data.yml is a scheduled GitHub Actions job

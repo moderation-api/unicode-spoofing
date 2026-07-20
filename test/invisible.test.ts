@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { analyze } from '../src';
+import { analyze, ZERO_WIDTH_INERT_RUN } from '../src';
 
 /** No unpaired surrogate survived the rewrite (String#isWellFormed needs ES2024). */
 const wellFormed = (s: string) =>
@@ -275,10 +275,30 @@ describe('invisible characters that belong to no word', () => {
     expect(r.normalized).toBe('if (level != "user // admin check ") {');
   });
 
-  it('flags a lone invisible between two spaces', () => {
+  it('leaves a zero-width run isolated in whitespace alone', () => {
+    // Nothing to split: the break it would create is already there. This shape
+    // is what rich-text editors leave behind in templates, and reporting it
+    // told users their own newsletter was an attack.
     const r = analyze('free \u200B money');
-    expect(r.spoofed).toBe(true);
-    expect(r.normalized).toBe('free  money');
+    expect(r.spoofed).toBe(false);
+    expect(r.normalized).toBe('free \u200B money');
+  });
+
+  it('still flags a zero-width run that touches text on either side', () => {
+    // One-sided contact is not inert: these render identically to the bare
+    // word but compare unequal to it, which is enough to pass an exact match.
+    for (const text of ['admin\u200B', '\u200Badmin', 'ad\u200Bmin', 'a = \u200B= b']) {
+      expect(analyze(text).signals.invisible).toBe(true);
+    }
+  });
+
+  it('flags a zero-width run in whitespace once it is long enough to carry data', () => {
+    // Isolation stops excusing a run at ZERO_WIDTH_INERT_RUN: every position
+    // is at least a bit, so length alone makes it a payload channel.
+    const inert = `free ${'\u200B'.repeat(ZERO_WIDTH_INERT_RUN)} money`;
+    const payload = `free ${'\u200B'.repeat(ZERO_WIDTH_INERT_RUN + 1)} money`;
+    expect(analyze(inert).spoofed).toBe(false);
+    expect(analyze(payload).signals.invisible).toBe(true);
   });
 
   it('flags an invisible run between punctuation', () => {
