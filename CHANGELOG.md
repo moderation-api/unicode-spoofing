@@ -1,5 +1,70 @@
 # @moderation-api/unicode-spoofing
 
+## 0.4.0
+
+### Minor Changes
+
+- [#16](https://github.com/moderation-api/unicode-spoofing/pull/16) [`301b60c`](https://github.com/moderation-api/unicode-spoofing/commit/301b60c2dc425e70eeaa604df1ccae6d17ac1026) Thanks [@chrisdengso](https://github.com/chrisdengso)! - Separate decode damage from spoofing with a new `encoding_damage` signal.
+
+  U+FFFD used to count as `illegal`, so a message whose name field had been
+  mangled upstream — `Hi Jos�� Luis` — reported as a spoofing attack. Across a
+  115-row sample of real SMS traffic that was 61% of all flags.
+
+  U+FFFD is a decoder's output, never an author's input: whatever the original
+  bytes were, they are gone by the time the character exists, so it can carry no
+  payload. It now reports as `encoding_damage`, which is included in `signals`
+  and `words` but deliberately does **not** set `spoofed`, and the normalizer
+  leaves it in place rather than silently repairing a corrupted message.
+
+  `SpoofSignal` gains a member and `signals` gains a key, so an exhaustive
+  `switch` or a strict `toEqual` on the signals object will need updating.
+  Genuinely illegal code points (NUL, C1 controls, non-characters) are unchanged.
+
+  A `SPOOFING_SIGNALS` constant is exported alongside `SPOOF_SIGNALS` — the same
+  list minus `encoding_damage` — so callers can partition the two the same way
+  `spoofed` does.
+
+- [#16](https://github.com/moderation-api/unicode-spoofing/pull/16) [`301b60c`](https://github.com/moderation-api/unicode-spoofing/commit/301b60c2dc425e70eeaa604df1ccae6d17ac1026) Thanks [@chrisdengso](https://github.com/chrisdengso)! - Judge Latin words on UTS [#39](https://github.com/moderation-api/unicode-spoofing/issues/39) Identifier_Status instead of skeleton luck.
+
+  A word already written in Latin cannot be impersonating Latin, so the
+  cross-script skeleton test measured only whether its fold happened to reach
+  ASCII — which it does for ordinary European orthography, and arbitrarily.
+  `æ` is a ligature that UTS [#39](https://github.com/moderation-api/unicode-spoofing/issues/39) dissolves to `ae`, while `ø` keeps its stroke as
+  a combining mark and never reaches ASCII, so `Ægir` was reported as a disguised
+  word and `Ålborg` was not. Same alphabet, opposite verdicts.
+
+  A Latin word now needs at least one character Unicode marks **Restricted** in
+  `IdentifierStatus.txt` before its skeleton counts. `Ægir`, `Þór`, `Straße`,
+  `cœur`, `ısıtır` and `Hawaiʻi` are all Allowed and pass through; `pɑypal`
+  (U+0251 IPA ALPHA) and `ﬁrst` (a compatibility ligature) are Restricted and are
+  still caught — intra-Latin homoglyphs that no script comparison can see.
+
+  The gate applies ONLY to Latin words. Cyrillic `а`/`о` are Allowed too, being
+  ordinary Russian, so applying it everywhere would let `раураl` walk through.
+
+  Adds `src/data/identifier-status.generated.ts` (~7 KB) and
+  `scripts/generate-identifier-status.mjs`; `npm run generate:data` refreshes
+  both tables.
+
+- [#16](https://github.com/moderation-api/unicode-spoofing/pull/16) [`301b60c`](https://github.com/moderation-api/unicode-spoofing/commit/301b60c2dc425e70eeaa604df1ccae6d17ac1026) Thanks [@chrisdengso](https://github.com/chrisdengso)! - Stop reporting zero-width runs that are isolated in whitespace.
+
+  A zero-width character evades a filter by splitting a word (`fr<ZWSP>ee`).
+  A run with whitespace (or a string boundary) on BOTH sides splits nothing —
+  the break it would create is already there — so it changes neither rendering
+  nor tokenization. Rich-text editors leave these in templates constantly, and
+  reporting them told senders their own newsletter was an attack.
+
+  Requiring isolation on both sides is the safety of the rule. One-sided contact
+  still does work: `admin<ZWSP>` renders as `admin` but compares unequal to it,
+  and `<ZWSP>Valencia` glues to the front of a token the same way, so both are
+  still reported. Runs longer than the new exported `ZERO_WIDTH_INERT_RUN` (4)
+  are reported wherever they sit, because length alone makes a run a payload
+  channel regardless of position.
+
+  Scoped to genuinely zero-width, non-reordering characters (U+200B, U+200C,
+  U+200D, U+2060, U+FEFF). Bidi controls, tag characters and blank glyphs are
+  untouched — Trojan Source and ASCII smuggling detection are unaffected.
+
 ## 0.3.0
 
 ### Minor Changes
