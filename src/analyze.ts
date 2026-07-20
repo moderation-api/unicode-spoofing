@@ -138,6 +138,61 @@ export const FORMAT_CHAR_SCRIPTS: readonly ScriptName[] = [
 
 const FORMAT_CHAR_SCRIPT_SET = new Set<ScriptName>(FORMAT_CHAR_SCRIPTS);
 
+/**
+ * Zero-width AND non-reordering: these render as nothing and move nothing.
+ * Deliberately excludes the other invisibles, which stay reportable wherever
+ * they sit — bidi controls reorder the line (Trojan Source), tag characters
+ * carry a payload (ASCII smuggling), and blank glyphs occupy space, so none of
+ * them are inert just because a space is next to them.
+ */
+const ZERO_WIDTH_CHARS = new Set([
+  0x200b, // ZERO WIDTH SPACE
+  0x200c, // ZERO WIDTH NON-JOINER
+  0x200d, // ZERO WIDTH JOINER
+  0x2060, // WORD JOINER
+  0xfeff, // ZERO WIDTH NO-BREAK SPACE
+]);
+
+/**
+ * Longest run of zero-width characters still treated as inert when it is
+ * isolated in whitespace. Each position in a run carries at least a bit, so a
+ * long run encodes a payload wherever it sits and is always reported.
+ */
+export const ZERO_WIDTH_INERT_RUN = 4;
+
+/**
+ * Marks zero-width runs that touch no text at all: whitespace (or a string
+ * boundary) on BOTH sides. Such a run splits no word and joins no token — it
+ * sits in a gap that already exists, so it changes neither what the text
+ * renders as nor how it tokenizes, and reporting it is noise.
+ *
+ * Requiring both sides is the whole safety of the rule. A run touching text on
+ * ONE side is still doing work: "admin<ZWSP>" renders as "admin" but compares
+ * unequal to it, and "<ZWSP>Valencia" glues to the front of a token the same
+ * way — both evade exact matching without splitting anything. Only complete
+ * isolation makes a zero-width run inert.
+ *
+ * Computed over the whole text because the judgement needs both neighbours,
+ * which neither the per-token nor the standalone pass can see on its own.
+ */
+function inertZeroWidthMask(text: string): Uint8Array {
+  const mask = new Uint8Array(text.length);
+  for (let i = 0; i < text.length;) {
+    if (!ZERO_WIDTH_CHARS.has(text.charCodeAt(i))) {
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < text.length && ZERO_WIDTH_CHARS.has(text.charCodeAt(end))) end += 1;
+    // A string boundary counts as whitespace: there is no text on that side.
+    const isolated =
+      (i === 0 || /\s/.test(text[i - 1]!)) && (end === text.length || /\s/.test(text[end]!));
+    if (isolated && end - i <= ZERO_WIDTH_INERT_RUN) mask.fill(1, i, end);
+    i = end;
+  }
+  return mask;
+}
+
 /** Combining marks stacked deeper than this on one base = zalgo. */
 export const ZALGO_MARK_RUN = 3;
 
@@ -208,8 +263,21 @@ function analyzeToken(
   dominantScript: ScriptName | null,
   anyMixedInMessage: boolean,
   expectedScripts: Set<ScriptName>,
+  inertMask: Uint8Array,
+  tokenStart: number,
 ): TokenAnalysis {
   const chars = [...token];
+  // Aligned with `chars`, so the inert judgement — made over the whole text —
+  // is readable per code point here. Stepping by `ch.length` keeps astral
+  // characters from shifting the mapping into the UTF-16 mask.
+  const inertAt: boolean[] = [];
+  {
+    let offset = tokenStart;
+    for (const ch of chars) {
+      inertAt.push(inertMask[offset] === 1);
+      offset += ch.length;
+    }
+  }
   // Blank glyphs are excluded before script analysis: a Hangul filler is a
   // Hangul *letter* to the property tables, and counting it as one would report
   // "fr<filler>ee" as a Latin/Hangul mix rather than as a hidden character.
@@ -244,7 +312,8 @@ function analyzeToken(
     if (base === undefined || !LETTER_RE.test(base) || PICTOGRAPHIC_RE.test(base)) continue;
     if (!VARIATION_BASE_SCRIPTS.has(primaryScript(base))) strayVariation.add(i);
   }
-  const hasInvisible = chars.some((ch) => isInvisibleChar(ch)) || strayVariation.size > 0;
+  const hasInvisible =
+    chars.some((ch, i) => isInvisibleChar(ch) && !inertAt[i]) || strayVariation.size > 0;
   if (hasInvisible && !scriptExempt) signals.push('invisible');
 
   // zalgo: combining marks stacked beyond orthographic depth.
@@ -323,7 +392,10 @@ function analyzeToken(
     const dropInvisible = signals.includes('invisible');
     normalized = chars
       .map((ch, i) => {
-        if (dropInvisible && (isInvisibleChar(ch) || strayVariation.has(i))) return '';
+        // Inert characters survive: they were not evidence, so removing them
+        // would edit the message without cause.
+        if (dropInvisible && ((isInvisibleChar(ch) && !inertAt[i]) || strayVariation.has(i)))
+          return '';
         if (zalgo && MARK_RE.test(ch)) return '';
         if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
@@ -376,10 +448,18 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
   const signals = emptySignals();
   const words: WordFinding[] = [];
   const replacements: Array<{ start: number; end: number; value: string }> = [];
+  const inertMask = inertZeroWidthMask(text);
 
   for (const match of tokens) {
     const token = match[0];
-    const result = analyzeToken(token, dominantScript, anyMixedInMessage, expectedScripts);
+    const result = analyzeToken(
+      token,
+      dominantScript,
+      anyMixedInMessage,
+      expectedScripts,
+      inertMask,
+      match.index,
+    );
     if (result.signals.length === 0) continue;
 
     for (const s of result.signals) signals[s] = true;
@@ -418,7 +498,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       const cp = text.codePointAt(i)!;
       const width = cp > 0xffff ? 2 : 1;
       const ch = String.fromCodePoint(cp);
-      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i)) {
+      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i) || inertMask[i] === 1) {
         i += width;
         continue;
       }
@@ -429,6 +509,7 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
         const next = text.codePointAt(end)!;
         const nextCh = String.fromCodePoint(next);
         if (!(isInvisibleChar(nextCh) || isVariationSelector(next)) || inWord(end)) break;
+        if (inertMask[end] === 1) break;
         end += next > 0xffff ? 2 : 1;
       }
 
