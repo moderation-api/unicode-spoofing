@@ -1,4 +1,5 @@
 import { foldChar, skeleton } from './confusables';
+import { isRestrictedIdentifierChar } from './identifier-status';
 import { analyzeWordScripts, primaryScript, type PseudoScript, type ScriptName } from './scripts';
 import {
   SPOOFING_SIGNALS,
@@ -339,6 +340,21 @@ function analyzeToken(
   //    the caller declared the scripts they expect and this word is entirely
   //    OUTSIDE them — a whole word in an unexpected script is spoof evidence
   //    on its own, no Latin context needed.
+  //
+  // A word already written in Latin is the exception, and needs one more test.
+  // Cross-script evidence does not exist there — nothing is impersonating Latin
+  // because the word IS Latin — so all that remains is whether its skeleton
+  // happens to reach ASCII. That fires on ordinary European orthography:
+  // "Ægir" folds to "AEgir" and "ısıtır" to "isitir", both perfectly normal
+  // words. Worse, it does so arbitrarily — "æ" is a ligature so UTS #39
+  // dissolves it to "ae", while "ø" keeps its stroke as a combining mark and
+  // never reaches ASCII, so "Ægir" was reported and "Ålborg" was not.
+  //
+  // Identifier_Status draws the line Unicode intends for exactly this question:
+  // "æ ø å ß þ œ ı" are Allowed (letters of living alphabets), while "ɑ" (IPA
+  // alpha) and "ﬁ" (a compatibility ligature) are Restricted. Requiring a
+  // Restricted character keeps intra-Latin homoglyphs like "pɑypal" — which no
+  // script check can catch — without indicting every Danish surname.
   let skeletonConfusable = false;
   if (!mixed && letters.length >= 2 && !isAsciiWord(token)) {
     const inExpectedScript = scripts.length > 0 && scripts.every((s) => expectedScripts.has(s));
@@ -350,7 +366,14 @@ function analyzeToken(
       expectedScripts.size > 0 &&
       scripts.length > 0 &&
       scripts.every((s) => !expectedScripts.has(s));
-    if (!inExpectedScript && (latinContext || outsideExpected)) {
+    // Script-neutral characters (the ʻokina, digits) carry no script evidence
+    // either way, so a word of Latin + Common letters is still a Latin word.
+    const writtenInLatin = letters.every((ch) => {
+      const s = primaryScript(ch);
+      return s === 'Latin' || s === 'Common' || s === 'Inherited' || s === 'Unknown';
+    });
+    const carriesRestricted = chars.some((ch) => isRestrictedIdentifierChar(ch));
+    if (!inExpectedScript && (latinContext || outsideExpected) && (!writtenInLatin || carriesRestricted)) {
       const sk = skeleton(token);
       if (ASCII_PRINTABLE_RE.test(sk) && ASCII_LETTER_RE.test(sk)) {
         signals.push('confusable_word');

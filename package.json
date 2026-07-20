@@ -54,7 +54,7 @@
     "test:coverage": "vitest run --coverage",
     "publint": "publint",
     "attw": "attw --pack .",
-    "generate:data": "node scripts/generate-confusables.mjs",
+    "generate:data": "node scripts/generate-confusables.mjs && node scripts/generate-identifier-status.mjs",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish"
