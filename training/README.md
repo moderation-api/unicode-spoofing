@@ -31,11 +31,12 @@ message length 128 bytes:
 
 ¹ The same int8 tagger executed one forward pass per output byte — what an
 autoregressive decoder does structurally. Same weights, same runtime, 75×
-slower. That gap is architectural, not a tuning problem: no quantization or
-distillation makes a per-byte loop fit a 10 ms budget. This is why Layer 2 is
-a **non-autoregressive byte tagger** (one encoder pass, per-byte labels:
-KEEP / DELETE / EMIT c) and why seq2seq models like ByT5 belong offline —
-as teachers for distillation and label generators — never in the hot path.
+slower. That gap is architectural, not a tuning problem: no quantization
+makes a per-byte loop fit a 10 ms budget. This is why Layer 2 is a
+**non-autoregressive byte tagger** (one encoder pass, per-byte labels:
+KEEP / DELETE / EMIT c) and why seq2seq models like ByT5 belong offline — as
+a quality baseline and a labeler for scraped evasions (see the last section)
+— never in the hot path.
 
 Full sweep (3 architectures × 3 sizes × fp32/int8 × 32/128/512 bytes):
 [`benchmark-results.md`](./benchmark-results.md). Two findings worth pulling
@@ -102,11 +103,21 @@ alone — do not starve them.
 
 ## Smoke-run quality (bundled toy corpus, 24k pairs, 4 epochs, CPU)
 
-<!-- QUALITY_TABLE -->
+| arch (small)    | params | exact @4ep | false_rewrite         | p50 @128B      |
+| --------------- | ------ | ---------- | --------------------- | -------------- |
+| **cnn**         | 375k   | **0.757**  | **0.000** (from ep 1) | 1.65 ms (fp32) |
+| gru             | 155k   | 0.567      | 0.009                 | 0.93 ms (int8) |
+| transformer     | 442k   | 0.550      | 0.000 (from ep 2)     | 1.47 ms (int8) |
 
-Read these as "the pipeline learns", nothing more — with a ~90-sentence
-corpus the model sees every sentence in dozens of corruptions, so exact-match
-here does not predict real-world generalization. The false_rewrite column is
+The CNN wins this round on both axes that matter: clearly best exact-match
+AND false_rewrite pinned at zero from the first epoch. That makes sense for
+the task — deciding what byte 57 should become needs the surrounding word,
+which is precisely a dilated convolution's receptive field, not global
+attention. Serve it in fp32 (see the quantization caveat above).
+
+Read the exact-match numbers as "the pipeline learns", nothing more — with a
+~90-sentence corpus the model sees every sentence in dozens of corruptions,
+so they do not predict real-world generalization. The false_rewrite column is
 the one that already means something: the tagging formulation holds it at
 zero even on a toy corpus.
 
@@ -133,5 +144,27 @@ The model earns its place only on the traffic rules cannot decide.
    a self-trained model has over any public checkpoint.
 3. Hold out an eval the generator did NOT produce (red-team samples, the
    Zéroe benchmark) to measure generalization instead of memorization.
-4. Optionally distill: fine-tune ByT5 offline as a teacher, use it to label
-   hard examples, train the tagger on its outputs. The teacher never serves.
+
+## Where ByT5 fits (and where distillation does not)
+
+Distillation is NOT part of the standard recipe here, because the usual
+reason for a teacher — you cannot produce labels — does not apply: the
+generator produces unlimited exactly-aligned labels for every corruption it
+can express, and a teacher adds nothing to those. Train the tagger on
+generated data directly.
+
+A fine-tuned ByT5 earns its place in exactly two situations, both offline:
+
+- **Quality ceiling.** `train_byt5.py` fine-tunes `google/byt5-small` on the
+  same JSONL and reports the same exact/false_rewrite metrics as `train.py`,
+  so "how much quality does the 1 ms budget cost us?" is a measurement, not
+  a guess. Run it on a GPU; it is smoke-tested on CPU but a real fine-tune
+  there is hours.
+- **Labels the generator cannot make.** Real logged evasions arrive without
+  alignment, and some need insertions (`fck` → `fuck`, `l8r` → `later`) that
+  a tagger cannot express and rules cannot decode. A fine-tuned seq2seq can
+  propose clean targets for THOSE rows — that is labeling scraped data, not
+  distilling synthetic data you already own.
+
+Either way it never serves: 1.6 s/message (measured above) is two orders of
+magnitude outside the budget.

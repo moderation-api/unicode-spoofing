@@ -51,6 +51,9 @@ describe('findKeywordEvasions — separators', () => {
     ['a s s', 'ass'],
     ['fr e e', 'free'],
     ['m-o-n-e-y', 'money'],
+    ['f - r - e - e', 'free'],
+    ['f- r- e- e', 'free'],
+    ['f . r . e . e', 'free'],
   ])('%s → %s', (spaced, keyword) => {
     expect(hit(`get ${spaced} today`)).toEqual([keyword]);
   });
@@ -66,6 +69,7 @@ describe('findKeywordEvasions — separators', () => {
 
   it('does not bridge gaps longer than the cap', () => {
     expect(hit('f     r     e     e')).toEqual([]);
+    expect(hit('f  -  r  -  e  -  e')).toEqual([]);
   });
 });
 
@@ -197,6 +201,8 @@ describe('prefilter', () => {
       'a$$',
       'f-r-e-e',
       'f r e e',
+      'f - r - e - e',
+      'f . r . e . e',
       'a s s',
       'fr e e',
       'cryp+0',

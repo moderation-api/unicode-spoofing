@@ -21,6 +21,19 @@ import { foldChar } from './confusables';
  * gaps and letter repetition weigh 1 each — one hyphen or a doubled letter is
  * everyday writing ("e-mail", a typo), but two such devices in one word is a
  * pattern.
+ *
+ * Design notes, relative to the closest prior art (obscenity, the npm
+ * profanity filter): obscenity normalizes the whole text through a
+ * transformer pipeline (resolve confusables → resolve leet → lowercase →
+ * collapse duplicates) and then pattern-matches the transformed view, which
+ * reports plain and disguised occurrences alike and needs a whitelist of
+ * benign words ("analog") to hold precision. Matching in place against the
+ * original characters instead lets every device be *scored* — this module
+ * only exists to report disguise, so an occurrence must prove it is one —
+ * and makes whitelists mostly unnecessary: word boundaries, the anchor rule,
+ * and the score threshold refuse the embedded-substring and
+ * ordinary-hyphenation matches a transform-then-match design has to
+ * whitelist away.
  */
 
 /**
@@ -261,6 +274,12 @@ function boundaryOk(text: string, index: number, direction: -1 | 1): boolean {
  * else is ignored. Matches are non-overlapping, leftmost-first; at the same
  * position the longest keyword wins. Plain, unobfuscated occurrences are
  * never reported — see the score threshold above.
+ *
+ * Cost is linear in the text for realistic keyword lists: at each position a
+ * keyword is attempted only if its FIRST letter is readable there (memoized
+ * per position), so a hundreds-strong blocklist costs at most one
+ * `matchLetter` probe per distinct first letter per position, and full
+ * matching runs only where something is actually starting.
  */
 export function findKeywordEvasions(
   text: string,
@@ -273,10 +292,19 @@ export function findKeywordEvasions(
   if (cleaned.length === 0) return [];
 
   const matches: KeywordEvasionMatch[] = [];
+  const firstLetterOk = new Map<string, boolean>();
   let i = 0;
   while (i < text.length) {
     let advanced = false;
+    firstLetterOk.clear();
     for (const keyword of cleaned) {
+      const first = keyword[0]!;
+      let ok = firstLetterOk.get(first);
+      if (ok === undefined) {
+        ok = matchLetter(text, i, first) !== null;
+        firstLetterOk.set(first, ok);
+      }
+      if (!ok) continue;
       const m = matchKeywordAt(text, i, keyword);
       if (m === null || m.score < EVASION_SCORE_THRESHOLD) continue;
       if (!boundaryOk(text, i - 1, -1) || !boundaryOk(text, m.end, 1)) continue;
@@ -381,7 +409,10 @@ export function prefilter(text: string): boolean {
       // pattern; two units is the pattern. A multi-letter group is ordinary
       // prose and resets the count.
       if (groupSize === 1) {
-        const shortGapBefore = sepBeforeGroup >= 1 && sepBeforeGroup <= 2;
+        // "Short" must mean the same thing here as MAX_GAP does in the
+        // matcher — "f - r - e - e" carries three-character gaps, and a gate
+        // stricter than the matcher would drop real matches on the floor.
+        const shortGapBefore = sepBeforeGroup >= 1 && sepBeforeGroup <= 4;
         const shortGapAfter = cls === SEP;
         if (shortGapBefore || shortGapAfter) {
           singles += 1;
@@ -394,7 +425,7 @@ export function prefilter(text: string): boolean {
 
       if (cls === SEP) {
         sepRun += 1;
-        if (sepRun > 2) singles = 0; // long gap — spacing, not a split word
+        if (sepRun > 4) singles = 0; // long gap — spacing, not a split word
       } else {
         sepRun = 0;
         if (cls === OTHER) singles = 0;
