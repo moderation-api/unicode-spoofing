@@ -1,5 +1,13 @@
 export { analyze, FORMAT_CHAR_SCRIPTS, ZALGO_MARK_RUN, ZERO_WIDTH_INERT_RUN } from './analyze';
-export { skeleton } from './confusables';
+export { confusableLookalikes, skeleton } from './confusables';
+export {
+  EVASION_SCORE_THRESHOLD,
+  findKeywordEvasions,
+  LEET_ALTERNATIVES,
+  LEET_SEQUENCES,
+  prefilter,
+  type KeywordEvasionMatch,
+} from './leet';
 export { UNICODE_VERSION, DATA_DATE } from './data/confusables.generated';
 export {
   LEGITIMATE_SCRIPT_COMBINATIONS,

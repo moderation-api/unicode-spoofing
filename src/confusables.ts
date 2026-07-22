@@ -65,3 +65,28 @@ export function foldChar(ch: string): string {
 export function hasConfusableMapping(ch: string): boolean {
   return CONFUSABLES.has(ch.codePointAt(0)!);
 }
+
+/**
+ * Inverse confusables: ASCII prototype character → every code point whose
+ * UTS #39 prototype is exactly that character. This is the *corruption*
+ * direction — given "a", the lookalikes an attacker could write instead —
+ * and exists for red-team tooling and the training-data generator
+ * (scripts/generate-training-data.mjs), which uses it to synthesize
+ * obfuscated↔clean pairs from the same pinned Unicode tables the detector
+ * runs on. Built lazily: detection never pays for it.
+ */
+let INVERSE: Map<string, string[]> | null = null;
+
+export function confusableLookalikes(ch: string): readonly string[] {
+  if (INVERSE === null) {
+    INVERSE = new Map();
+    for (const [cp, proto] of CONFUSABLES) {
+      if (!isAscii(proto) || [...proto].length !== 1) continue;
+      const source = String.fromCodePoint(cp);
+      const list = INVERSE.get(proto);
+      if (list === undefined) INVERSE.set(proto, [source]);
+      else list.push(source);
+    }
+  }
+  return INVERSE.get(ch) ?? [];
+}

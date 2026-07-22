@@ -1,5 +1,6 @@
 import { foldChar, skeleton } from './confusables';
 import { isRestrictedIdentifierChar } from './identifier-status';
+import { findKeywordEvasions } from './leet';
 import { analyzeWordScripts, primaryScript, type PseudoScript, type ScriptName } from './scripts';
 import {
   SPOOFING_SIGNALS,
@@ -245,6 +246,7 @@ function emptySignals(): Record<SpoofSignal, boolean> {
   return {
     mixed_script: false,
     confusable_word: false,
+    keyword_evasion: false,
     invisible: false,
     zalgo: false,
     illegal: false,
@@ -639,6 +641,43 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       i += width;
     }
     flush(text.length);
+  }
+
+  // Disguised keywords, when the caller supplied any. This pass sees the raw
+  // text — not tokens — because a split word ("f-r-e-e") spans several tokens
+  // and a leet word ("fr33") is letters-plus-digits that the per-token signals
+  // have no opinion on. A match's rewrite replaces the whole matched span with
+  // the plain keyword, superseding any smaller rewrite inside it (stripping a
+  // ZWSP out of "f<ZWSP>r33" matters less than resolving it to "free"). A match
+  // that only PARTIALLY overlaps another rewrite forfeits its rewrite —
+  // stitching two half-overlapping edits would corrupt the output — but keeps
+  // its finding.
+  if (options.keywords !== undefined && options.keywords.length > 0) {
+    const evasions = findKeywordEvasions(text, options.keywords);
+    if (evasions.length > 0) {
+      signals.keyword_evasion = true;
+      const spans = evasions.map((m) => ({ start: m.index, end: m.index + m.text.length }));
+      for (const m of evasions) {
+        words.push({
+          word: m.text,
+          index: m.index,
+          signals: ['keyword_evasion'],
+          scripts: [],
+          keyword: m.keyword,
+        });
+      }
+      const kept = replacements.filter(
+        (r) => !spans.some((s) => r.start >= s.start && r.end <= s.end),
+      );
+      replacements.length = 0;
+      replacements.push(...kept);
+      for (let k = 0; k < evasions.length; k += 1) {
+        const s = spans[k]!;
+        const collides = replacements.some((r) => r.start < s.end && r.end > s.start);
+        if (!collides)
+          replacements.push({ start: s.start, end: s.end, value: evasions[k]!.keyword });
+      }
+    }
   }
 
   // Findings and replacements may now be interleaved (tokens vs. illegal code

@@ -1,11 +1,18 @@
 import type { ScriptName } from './scripts';
 
 export type SpoofSignal =
-  'mixed_script' | 'confusable_word' | 'invisible' | 'zalgo' | 'illegal' | 'encoding_damage';
+  | 'mixed_script'
+  | 'confusable_word'
+  | 'keyword_evasion'
+  | 'invisible'
+  | 'zalgo'
+  | 'illegal'
+  | 'encoding_damage';
 
 export const SPOOF_SIGNALS: readonly SpoofSignal[] = [
   'mixed_script',
   'confusable_word',
+  'keyword_evasion',
   'invisible',
   'zalgo',
   'illegal',
@@ -40,6 +47,11 @@ export interface WordFinding {
    * mixed_script/confusable_word signal (what the token resolves to).
    */
   skeleton?: string;
+  /**
+   * The caller-supplied keyword this finding is a disguise of — present only
+   * on keyword_evasion findings.
+   */
+  keyword?: string;
 }
 
 export interface AnalyzeOptions {
@@ -49,6 +61,14 @@ export interface AnalyzeOptions {
    * are never reported as confusable_word; intra-word mixing still is.
    */
   expectedScripts?: readonly ScriptName[];
+  /**
+   * Words to hunt for in disguise: leetspeak ("fr33"), separator splitting
+   * ("f-r-e-e"), lookalike substitution, and combinations. Single lowercase
+   * ASCII words of three letters or more; anything else is ignored. Plain,
+   * unobfuscated occurrences are NOT reported — exact matching stays the
+   * caller's job. See `findKeywordEvasions` for the matching rules.
+   */
+  keywords?: readonly string[];
 }
 
 export interface AnalysisResult {

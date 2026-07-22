@@ -19,6 +19,7 @@ describe('README — usage', () => {
     expect(r.signals).toEqual({
       mixed_script: false,
       confusable_word: true,
+      keyword_evasion: false,
       invisible: false,
       zalgo: false,
       illegal: false,
@@ -53,6 +54,7 @@ describe('README — usage', () => {
     expect(r.signals).toEqual({
       mixed_script: true,
       confusable_word: true,
+      keyword_evasion: false,
       invisible: true,
       zalgo: true,
       illegal: true,
