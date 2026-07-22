@@ -41,6 +41,7 @@ r.signals;
 // {
 //   mixed_script: false,
 //   confusable_word: true,   <- fullwidth, math-bold and circled letters
+//   keyword_evasion: false,  <- fires only when you pass a keyword list
 //   invisible: false,
 //   zalgo: false,
 //   illegal: false,
@@ -76,7 +77,7 @@ a stray NUL byte:
 ```ts
 const r = analyze('НОТ busіnеss: fr\u200Bee cr̸͈͖͡ypto\u0000');
 
-r.signals; // every spoofing signal is true
+r.signals; // every spoofing signal is true (except keyword_evasion — no keyword list given)
 r.normalized; // 'HOT business: free crypto'
 r.counts; // { wordsTotal: 4, wordsAffected: 5 }
 
@@ -186,6 +187,40 @@ analyze('Ⓕⓡⓔⓔ ⓜⓞⓝⓔⓨ').normalized;
 // 'Free money'                  — circled letters (also ＦＲＥＥ fullwidth)
 ```
 
+### Leetspeak and split words
+
+Leet substitutions and separator splitting are pure ASCII, so no Unicode table
+can see them — and unlike confusables they have no safe standalone decoding:
+`4` is "a" in `g4rbage` but a number in `b4`, and collapsing every hyphen turns
+`e-mail` into `email`. The well-posed form of the problem is **matching**: tell
+`analyze` which words matter to you, and it finds them in disguise.
+
+```ts
+const r = analyze('get f-r-3-3 crypt0 now', { keywords: ['free', 'crypto'] });
+
+r.signals.keyword_evasion; // true
+r.normalized; // 'get free crypto now'
+r.words;
+// [{ word: 'f-r-3-3', index: 4,  signals: ['keyword_evasion'], scripts: [], keyword: 'free' },
+//  { word: 'crypt0',  index: 12, signals: ['keyword_evasion'], scripts: [], keyword: 'crypto' }]
+```
+
+The matcher reads single-character leet (`fr33`, `a$$`), ASCII art (`|-|ot`),
+separator splitting (`f r e e`, `f.r.e.e`, zero-width splits), stretched
+letters (`fuuuck`), Unicode lookalikes, and combinations of all of them —
+each device is scored, and only a total of `EVASION_SCORE_THRESHOLD` or more
+is a finding. Plain occurrences of a keyword score zero and are never
+reported: exact matching stays your filter's job.
+
+What does NOT match, by design: `iphone15`, `mp3`, `b4`, `24h` (no keyword
+resembles them), `e-mail` for "email" (one hyphen is ordinary writing),
+`cl-ass` for "ass" (a match may not hide behind a hyphenated prefix),
+`assistant` (word boundaries), and `room 505` for "sos" — a match made only
+of ASCII substitutions with no plain letter anchoring it is rejected.
+
+`findKeywordEvasions(text, keywords)` exposes the matcher standalone, with
+per-match scores.
+
 ### Zalgo
 
 ```ts
@@ -209,6 +244,7 @@ analyze('Ship it 🎉 👨\u200D👩\u200D👧 ℹ\uFE0F').spoofed; // false —
 | ----------------- | -------------------------------------------------------------------- | ------------------------------------- |
 | `mixed_script`    | One word blends multiple scripts                                     | `busіnеss` (Latin + Cyrillic `і`/`е`) |
 | `confusable_word` | Whole word is a Latin lookalike (UTS #39 skeleton resolves to ASCII) | `НОТ` → `HOT`, `ＨＯＴ`, `𝐇𝐎𝐓`        |
+| `keyword_evasion` | A caller-supplied keyword written in disguise (needs `keywords`)     | `fr33`, `f-r-e-e`, `а$$` → `ass`      |
 | `invisible`       | Characters that render as nothing, in or between words               | zero-width, bidi, tag chars, fillers  |
 | `zalgo`           | Combining marks stacked beyond orthographic depth (≥3 per base)      | `Z̸̢̬a̛lg̕o`                               |
 | `illegal`         | Control or non-character code points anywhere in text                | `NUL`, `U+0085`, `U+FFFE`             |
@@ -227,7 +263,7 @@ against a name instead of a hardcoded string.
 
 | Export                           | What it is                                                                                            |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `SPOOF_SIGNALS`                  | All six signal names — the keys of `result.signals`                                                   |
+| `SPOOF_SIGNALS`                  | All seven signal names — the keys of `result.signals`                                                 |
 | `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
 | `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
 | `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |
@@ -236,6 +272,9 @@ against a name instead of a hardcoded string.
 | `ZALGO_MARK_RUN`                 | Combining marks per base at which `zalgo` fires                                                       |
 | `UNICODE_VERSION`, `DATA_DATE`   | Which UTS #39 confusables table is compiled in                                                        |
 | `ZERO_WIDTH_INERT_RUN`           | Longest zero-width run still treated as inert when isolated in whitespace                             |
+| `EVASION_SCORE_THRESHOLD`        | Obfuscation score at which a disguised keyword becomes a `keyword_evasion` finding                    |
+| `LEET_ALTERNATIVES`              | Character → letters it can stand for (`3` → `e`) — the leet table the matcher reads                   |
+| `LEET_SEQUENCES`                 | Multi-character ASCII-art spellings (`\|-\|` → `h`)                                                   |
 
 `ScriptName` types all of these, so `expectedScripts` and any comparison
 against `dominantScript` is checked against the real list — a typo like
@@ -279,6 +318,24 @@ word in an unexpected script becomes evidence on its own.
 ```ts
 analyze(text, { expectedScripts: ['Cyrillic'] }); // real Russian traffic
 ```
+
+**Gate the whole pipeline with `prefilter`.** One table-free linear pass that
+returns `false` for the overwhelming share of real traffic — plain ASCII prose
+with no letter/digit mixing and no spaced-out letters — so clean messages skip
+`analyze`, keyword matching, and any downstream ML entirely:
+
+```ts
+if (prefilter(userInput)) {
+  const r = analyze(userInput, { keywords: BANNED });
+  // ... only suspicious traffic pays for analysis
+}
+```
+
+A `true` is a routing decision, not a verdict — `U.S.A.` and `iphone15` trip
+it, and the only cost of a wrong `true` is running the real analysis. Two
+documented blind spots (a word with every letter substituted and none left,
+and words split into multi-letter chunks) are listed in the `prefilter` docs;
+run the analysis unconditionally if they matter to your threat model.
 
 ### False-positive guards
 

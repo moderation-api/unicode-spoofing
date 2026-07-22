@@ -1,0 +1,4 @@
+data/
+checkpoints/
+*.onnx
+__pycache__/

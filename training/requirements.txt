@@ -1,0 +1,8 @@
+# CPU-only torch is enough; install with:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
+onnx>=1.15
+onnxruntime>=1.17
+numpy>=1.26
+# Optional, only for benchmark_latency.py --byt5 (downloads ~1.2 GB model):
+# transformers>=4.40

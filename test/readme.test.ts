@@ -7,7 +7,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { analyze, SCRIPT_NAMES, skeleton, type ScriptName } from '../src';
+import {
+  analyze,
+  findKeywordEvasions,
+  prefilter,
+  SCRIPT_NAMES,
+  skeleton,
+  type ScriptName,
+} from '../src';
 
 describe('README — usage', () => {
   it('resolves three styling systems in one sentence', () => {
@@ -72,6 +79,55 @@ describe('README — usage', () => {
     expect(r.signals.encoding_damage).toBe(true);
     expect(r.spoofed).toBe(false);
     expect(r.changed).toBe(false);
+  });
+});
+
+describe('README — leetspeak and split words', () => {
+  it('finds disguised keywords and rewrites them', () => {
+    const r = analyze('get f-r-3-3 crypt0 now', { keywords: ['free', 'crypto'] });
+
+    expect(r.signals.keyword_evasion).toBe(true);
+    expect(r.normalized).toBe('get free crypto now');
+    expect(r.words).toEqual([
+      { word: 'f-r-3-3', index: 4, signals: ['keyword_evasion'], scripts: [], keyword: 'free' },
+      { word: 'crypt0', index: 12, signals: ['keyword_evasion'], scripts: [], keyword: 'crypto' },
+    ]);
+  });
+
+  it('reads every device the section lists', () => {
+    const hits = (text: string, keywords: string[]) =>
+      findKeywordEvasions(text, keywords).map((m) => m.keyword);
+
+    expect(hits('fr33', ['free'])).toEqual(['free']);
+    expect(hits('a$$', ['ass'])).toEqual(['ass']);
+    expect(hits('|-|ot', ['hot'])).toEqual(['hot']);
+    expect(hits('f r e e', ['free'])).toEqual(['free']);
+    expect(hits('f.r.e.e', ['free'])).toEqual(['free']);
+    expect(hits('fuuuck', ['fuck'])).toEqual(['fuck']);
+  });
+
+  it('does not match what the section promises it will not', () => {
+    const keywords = ['ass', 'email', 'sos', 'phone', 'bad'];
+    expect(findKeywordEvasions('iphone15 mp3 b4 24h', keywords)).toEqual([]);
+    expect(findKeywordEvasions('e-mail', keywords)).toEqual([]);
+    expect(findKeywordEvasions('cl-ass', keywords)).toEqual([]);
+    expect(findKeywordEvasions('assistant', keywords)).toEqual([]);
+    expect(findKeywordEvasions('room 505', keywords)).toEqual([]);
+  });
+
+  it('plain occurrences are never reported', () => {
+    expect(findKeywordEvasions('free money for all', ['free', 'money'])).toEqual([]);
+  });
+});
+
+describe('README — prefilter recipe', () => {
+  it('clean prose skips the pipeline, suspicious traffic enters it', () => {
+    expect(prefilter('Thanks, see you at the meeting tomorrow.')).toBe(false);
+    expect(prefilter('get fr33 stuff')).toBe(true);
+    expect(prefilter('f-r-e-e')).toBe(true);
+    expect(prefilter('НОТ deal')).toBe(true);
+    // Recall-oriented: a wrong true only costs running the real analysis.
+    expect(prefilter('U.S.A.')).toBe(true);
   });
 });
 

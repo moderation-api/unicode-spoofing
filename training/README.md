@@ -1,0 +1,137 @@
+# training/ — the trainable Layer 2
+
+The library itself (Layer 1) is deterministic: confusable folding, invisible
+stripping, and keyword-evasion matching, all table-driven, all microseconds.
+What it cannot do is *generalize* — phonetic leet (`l8r`, `gr8`), novel ASCII
+art, vowel dropping, and whatever evaders invent next week. That is a learning
+problem, and this directory is the scaffolding for it: synthetic data
+generation, three candidate architectures, training, ONNX export, and a
+latency benchmark that decides what is allowed into a serving path.
+
+Nothing here ships in the npm package. It is a working pipeline, not a
+trained production model — the bundled corpus is ~90 sentences, enough to
+prove the loop end to end, not to train something deployable. Point the
+generator at a real corpus (and your production evasion samples) for that.
+
+## The architecture decision, in numbers
+
+The serving budget for a preprocessing step is ~10 ms. That rules
+architectures in or out before quality is even discussed, so the benchmark
+comes first. Measured on this repo's CI-class container (x86_64, 4 cores,
+**batch 1, single thread** — the honest serving configuration), ONNX Runtime,
+message length 128 bytes:
+
+| approach                                  | params | p50 latency  |
+| ----------------------------------------- | ------ | ------------ |
+| gru-small tagger (int8)                   | 155k   | **0.93 ms**  |
+| transformer-small tagger (int8)           | 442k   | **1.47 ms**  |
+| cnn-small tagger (fp32)                   | 375k   | **1.65 ms**  |
+| transformer-small used as seq2seq¹        | 442k   | 109 ms       |
+| byt5-small, real `generate()` (fp32)      | 300M   | **1,574 ms** |
+
+¹ The same int8 tagger executed one forward pass per output byte — what an
+autoregressive decoder does structurally. Same weights, same runtime, 75×
+slower. That gap is architectural, not a tuning problem: no quantization or
+distillation makes a per-byte loop fit a 10 ms budget. This is why Layer 2 is
+a **non-autoregressive byte tagger** (one encoder pass, per-byte labels:
+KEEP / DELETE / EMIT c) and why seq2seq models like ByT5 belong offline —
+as teachers for distillation and label generators — never in the hot path.
+
+Full sweep (3 architectures × 3 sizes × fp32/int8 × 32/128/512 bytes):
+[`benchmark-results.md`](./benchmark-results.md). Two findings worth pulling
+out:
+
+- **Everything "small" or below fits the budget with room to spare** at
+  realistic chat-message lengths. Even 512-byte messages stay under ~10 ms
+  on the transformer and GRU.
+- **int8 quantization helps transformers and GRUs but HURTS convolutions**
+  (ONNX Runtime's dynamic-quantized ConvInteger is slower than fp32 Conv:
+  cnn-small goes 1.65 ms → 7.8 ms). Measure, don't assume — serve CNNs in
+  fp32 if a CNN wins on quality.
+
+Reproduce with:
+
+```bash
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+python benchmark_latency.py --iters 100 --autoregressive
+python benchmark_latency.py --byt5   # optional; downloads ~1.2 GB
+```
+
+## Why tagging, not generation
+
+A tagger classifies every input byte (keep / delete / replace-with-c) in one
+forward pass. Besides the 75× latency win above, the formulation is the
+hallucination guard: the model cannot emit anything unanchored to an input
+byte, so its worst failure is mangling a word — it cannot invent one. For a
+moderation pipeline that must never "correct" a username into a slur, that
+property is worth more than the expressiveness it costs (insertions — e.g.
+restoring dropped vowels, `fck` → `fuck` — are out of scope for a tagger;
+that stays a keyword-layer and offline-model problem).
+
+The metric that gates deployment is `false_rewrite`: the share of clean
+(identity) examples the model dares to edit. It sits at 0.0000 after one
+epoch on synthetic data; keep it there on real traffic before caring about
+exact-match.
+
+## Pipeline
+
+```bash
+# 1. Generate (corrupted, clean) pairs from the library's own tables.
+#    Same seed → identical data. Alignment ships with each row, so training
+#    never runs edit distance.
+pnpm build
+node ../scripts/generate-training-data.mjs --count 24000 --seed 42 \
+  --out data/train.jsonl
+
+# 2. Train a tagger.
+python train.py --data data/train.jsonl --arch gru --size small --epochs 4
+
+# 3. Export for serving.
+python export_onnx.py --checkpoint checkpoints/gru-small.pt \
+  --out gru-small.onnx --quantize
+```
+
+The generator corrupts with the SAME tables the detector reads —
+`LEET_ALTERNATIVES`, `LEET_SEQUENCES`, and the UTS #39 confusables inverted
+via `confusableLookalikes` — so generator and detector cannot drift apart.
+Devices: single-char leet, ASCII art, Unicode lookalikes, separator
+insertion, whole-word spacing, zero-width insertion, letter stretching, in
+mild/medium/heavy tiers. ~35% of examples are untouched identity pairs;
+they are what teach the model to leave numbers, prices, and clean prose
+alone — do not starve them.
+
+## Smoke-run quality (bundled toy corpus, 24k pairs, 4 epochs, CPU)
+
+<!-- QUALITY_TABLE -->
+
+Read these as "the pipeline learns", nothing more — with a ~90-sentence
+corpus the model sees every sentence in dozens of corruptions, so exact-match
+here does not predict real-world generalization. The false_rewrite column is
+the one that already means something: the tagging formulation holds it at
+zero even on a toy corpus.
+
+## Serving shape
+
+```
+message → prefilter (µs, drops most clean traffic)
+        → analyze + keyword matching (µs–ms, deterministic, explainable)
+        → tagger (~1 ms, only for traffic that survived the gate)
+        → your moderation stack
+```
+
+The deterministic layers stay first: they are free, they are explainable to
+users, and they are the gate that keeps the model's amortized cost near zero.
+The model earns its place only on the traffic rules cannot decide.
+
+## Scaling this up for real
+
+1. Swap the corpus: `--input your-clean-corpus.txt` (one sentence per line;
+   include digit-heavy and price-heavy text or the model will learn that
+   digits are always leet).
+2. Mix in logged evasions from production, labeled via the keyword matcher or
+   by hand, so the training distribution tracks live attacks — the one edge
+   a self-trained model has over any public checkpoint.
+3. Hold out an eval the generator did NOT produce (red-team samples, the
+   Zéroe benchmark) to measure generalization instead of memorization.
+4. Optionally distill: fine-tune ByT5 offline as a teacher, use it to label
+   hard examples, train the tagger on its outputs. The teacher never serves.
