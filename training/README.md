@@ -112,6 +112,22 @@ into "505" would teach the model that spaced digits should merge, and phone
 numbers are spaced digits. The hardest pairs corrupt the letters AROUND
 untouched digits: "r0om 679 is r<ZWSP>e4dy" → "room 679 is ready".
 
+Measured effect (cnn-small, 4 epochs, same in-distribution quality —
+0.754 exact / 0.000 false_rewrite — before → after on unseen probes):
+
+| probe                                  | without traps        | with traps        |
+| -------------------------------------- | -------------------- | ----------------- |
+| `invoice 4055 is due in 30 days`       | `…due in eo days`    | **unchanged ✓**   |
+| `wait 45s more and call 0800 455 455`  | `4ss … oboo ass 4ss` | one char off¹     |
+| `the iphone15 costs 999 dollars`       | `iphonels … 9g9`     | **unchanged ✓**   |
+| `the еlеphant in the room` (Cyrillic е)| `elefhant … rom`     | **`elephant` ✓**  |
+| `f—r—e—e money` (em dash, unseen)      | `fr money`           | **`free money` ✓**|
+
+¹ the sentence-final `455` still decodes `45s`; digit runs at message end
+need more template coverage. Casing, zalgo marks, and slash separators
+remain open — casing is solved in the pipeline (lowercase before the
+tagger), the other two need their devices added to the generator.
+
 ## Smoke-run quality (bundled toy corpus, 24k pairs, 4 epochs, CPU)
 
 | arch (small)    | params | exact @4ep | false_rewrite         | p50 @128B      |
