@@ -56,25 +56,53 @@ def decode(model: torch.nn.Module, text: str) -> str:
     return labels_to_bytes(data, labels).decode("utf-8", errors="replace")
 
 
+def make_canine_decoder(path: str):
+    """Decoder over a fine-tuned CANINE checkpoint dir (see train_canine.py),
+    same signature as `decode` so both modes share the analysis below."""
+    from transformers import AutoTokenizer, CanineForTokenClassification
+
+    from train_canine import apply_labels, pick_device
+
+    device = pick_device()
+    tok = AutoTokenizer.from_pretrained(path)
+    model = CanineForTokenClassification.from_pretrained(path).to(device)
+    model.eval()
+
+    def decode_canine(text: str) -> str:
+        enc = tok(text, return_tensors="pt", truncation=True).to(device)
+        with torch.no_grad():
+            labels = model(**enc).logits.argmax(-1)[0].tolist()
+        chars = list(text)
+        return apply_labels(text, labels[1 : 1 + len(chars)])
+
+    return decode_canine
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", required=True)
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--checkpoint", help="a train.py .pt checkpoint")
+    group.add_argument("--canine", help="a train_canine.py checkpoint directory")
     ap.add_argument("--data", default=None)
     ap.add_argument("--limit", type=int, default=2000)
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    model = build_model(ckpt["arch"], ckpt["size"])
-    model.load_state_dict(ckpt["state"])
-    model.eval()
+    if args.canine is not None:
+        run = make_canine_decoder(args.canine)
+    else:
+        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        model = build_model(ckpt["arch"], ckpt["size"])
+        model.load_state_dict(ckpt["state"])
+        model.eval()
+        run = lambda text: decode(model, text)  # noqa: E731
 
     if args.probe:
         print("=== out-of-distribution probes ===")
         width = max(len(c) for c, _ in PROBES)
         for category, text in PROBES:
-            out = decode(model, text)
+            out = run(text)
             print(f"{category:<{width}}  {text!r}")
             print(f"{'':<{width}}  → {out!r}")
         print()
@@ -91,7 +119,7 @@ def main() -> None:
         totals: dict[str, list[int]] = {}
         misses: list[tuple[str, str, str, str]] = []
         for row in rows:
-            out = decode(model, row["src"])
+            out = run(row["src"])
             tier = row.get("tier", "?")
             ok = out == row["tgt"]
             totals.setdefault(tier, [0, 0])

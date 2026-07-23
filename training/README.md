@@ -185,7 +185,7 @@ pass. Measured here: ~120 ms fp32 / ~53 ms int8 per message, single thread.
 `train_canine.py` fine-tunes it on the same JSONL with the same
 KEEP/DELETE/EMIT formulation and the same metrics. Its two roles:
 
-- scoring gated/flagged traffic (~53 ms is fine for the few percent the
+- scoring gated/flagged traffic (tens of ms is fine for the few percent the
   prefilter lets through — never for all traffic),
 - pseudo-labeling a large real corpus to distill its world knowledge into
   the 1 ms CNN (knowledge transfer — distinct from label generation, which
@@ -193,6 +193,35 @@ KEEP/DELETE/EMIT formulation and the same metrics. Its two roles:
 
 Subword minis (bert-tiny, MiniLM) are NOT alternatives: their tokenizers
 shatter on exactly the obfuscated text this pipeline exists for.
+
+### Running the CANINE tier locally
+
+All latency figures in this file are from a 4-core sandbox container at a
+single CPU thread — they set the order of magnitude, nothing more. Measure
+on the machine you will serve on. Sandbox reference for canine-s, single
+pass: int8 41 / 77 / 241 ms at 32 / 128 / 512 characters (fp32 roughly
+2.5× that).
+
+```bash
+pip install -r requirements.txt        # plain torch on GPU/Apple Silicon;
+                                       # add the cpu extra-index only on CPU boxes
+
+# your hardware's number first — this decides where the tier can sit:
+python benchmark_latency.py --canine --skip-sweep
+
+# fine-tune (device auto-picks cuda → mps → cpu):
+python train_canine.py --data data/train.jsonl --steps 1000 --batch 16 \
+    --out checkpoints/canine-tagger
+
+# probe it with the same battery the CNN is judged by:
+python error_analysis.py --canine checkpoints/canine-tagger --probe
+python error_analysis.py --canine checkpoints/canine-tagger \
+    --data data/train.jsonl --limit 1000
+```
+
+On Apple Silicon export `PYTORCH_ENABLE_MPS_FALLBACK=1` — a couple of
+CANINE ops fall back to CPU and torch errors without it. Generate the
+training JSONL first if you have not (step 1 of the Pipeline section).
 
 ## Where ByT5 fits (and where distillation does not)
 

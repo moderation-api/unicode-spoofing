@@ -73,6 +73,41 @@ def time_autoregressive(session, seq_len: int, iters: int = 5) -> float:
     return statistics.median(samples)
 
 
+def bench_canine(iters: int = 15) -> list[str]:
+    """Single-pass CANINE-S latency, fp32 and int8-dynamic, at SEQ_LENS
+    characters. Run this on the machine you plan to SERVE on — the numbers
+    in the README are from a 4-core sandbox container and only set the
+    order of magnitude."""
+    from transformers import AutoTokenizer, CanineForTokenClassification
+
+    name = "google/canine-s"
+    tok = AutoTokenizer.from_pretrained(name)
+    model = CanineForTokenClassification.from_pretrained(name, num_labels=2)
+    model.eval()
+    torch.set_num_threads(1)
+    quantized = torch.ao.quantization.quantize_dynamic(
+        model, {torch.nn.Linear}, dtype=torch.qint8
+    )
+    lines = []
+    for precision, m in [("fp32", model), ("int8", quantized)]:
+        for seq_len in SEQ_LENS:
+            enc = tok("a" * seq_len, return_tensors="pt")
+            with torch.no_grad():
+                m(**enc)  # warmup
+                samples = []
+                for _ in range(iters):
+                    t0 = time.perf_counter()
+                    m(**enc)
+                    samples.append((time.perf_counter() - t0) * 1000)
+            p50 = statistics.median(samples)
+            p95 = sorted(samples)[int(len(samples) * 0.95)]
+            lines.append(
+                f"| canine-s (single pass) | 132M | {precision} | {seq_len} | "
+                f"{p50:.0f} | {p95:.0f} |"
+            )
+    return lines
+
+
 def bench_byt5(iters: int = 3) -> list[str]:
     from transformers import AutoTokenizer, T5ForConditionalGeneration
 
@@ -106,6 +141,8 @@ def main() -> None:
     ap.add_argument("--iters", type=int, default=100)
     ap.add_argument("--autoregressive", action="store_true")
     ap.add_argument("--byt5", action="store_true")
+    ap.add_argument("--canine", action="store_true")
+    ap.add_argument("--skip-sweep", action="store_true", help="only the --canine/--byt5 extras")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -118,7 +155,7 @@ def main() -> None:
         "|---|---|---|---|---|---|",
     ]
 
-    for arch in ARCHS:
+    for arch in [] if args.skip_sweep else ARCHS:
         for size in SIZES[arch]:
             model = build_model(arch, size)
             params = param_count(model)
@@ -144,6 +181,9 @@ def main() -> None:
                             f"{seq_len} | {total:.1f} | — |"
                         )
             print("\n".join(lines[-8:]))
+
+    if args.canine:
+        lines.extend(bench_canine())
 
     if args.byt5:
         lines.extend(bench_byt5())

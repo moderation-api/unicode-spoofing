@@ -1,8 +1,11 @@
-# CPU-only torch is enough; install with:
+# CPU-only torch is enough for the from-scratch taggers; install with:
 #   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+# On a local GPU/Apple Silicon machine, install plain torch instead (drop the
+# extra index) so CUDA/MPS builds are picked up.
 torch>=2.2
 onnx>=1.15
 onnxruntime>=1.17
 numpy>=1.26
-# Optional, only for benchmark_latency.py --byt5 (downloads ~1.2 GB model):
-# transformers>=4.40
+# For the CANINE mid-tier (train_canine.py, error_analysis.py --canine,
+# benchmark_latency.py --canine) and the ByT5 baseline (--byt5):
+transformers>=4.40

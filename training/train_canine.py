@@ -35,6 +35,16 @@ from model import DELETE, EMIT_BASE, KEEP, NUM_CLASSES
 IGNORE = -100
 
 
+def pick_device() -> str:
+    """cuda → mps → cpu. On Apple Silicon set PYTORCH_ENABLE_MPS_FALLBACK=1;
+    a couple of CANINE ops fall back to CPU and torch errors without it."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def char_label(char: str, target: str) -> int | None:
     """Per-character label. Unlike the byte scheme, a multi-byte KEEP is
     representable — KEEP copies the character, whatever its encoding."""
@@ -126,7 +136,7 @@ def main() -> None:
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = pick_device()
 
     source = args.out if args.eval_only else args.model
     tok = AutoTokenizer.from_pretrained(source)
