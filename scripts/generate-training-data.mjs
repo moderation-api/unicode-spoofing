@@ -21,6 +21,12 @@
 //   --identity <rate>  share of untouched examples (default 0.35). Identity
 //                      pairs are what teach the model to leave clean text,
 //                      numbers, and prices alone; do not starve them.
+//   --numbers <rate>   share of examples drawn from the number-trap templates
+//                      (default 0.3): phone numbers, room numbers, prices,
+//                      durations, versions — with fresh random digits every
+//                      time, so number preservation is learned as a rule,
+//                      not memorized per number. Digits are NEVER corrupted;
+//                      letter words around them are.
 //   --out <file>       output path (default training/data/train.jsonl)
 //
 // Requires a build first (`pnpm build`) — the corruption tables are imported
@@ -49,6 +55,7 @@ const opt = (name, fallback) => {
 const COUNT = Number(opt('count', '20000'));
 const SEED = Number(opt('seed', '42'));
 const IDENTITY_RATE = Number(opt('identity', '0.35'));
+const NUMBERS_RATE = Number(opt('numbers', '0.3'));
 const OUT = opt('out', join(ROOT, 'training', 'data', 'train.jsonl'));
 const INPUT = opt('input', join(ROOT, 'scripts', 'sample-corpus.txt'));
 
@@ -99,6 +106,50 @@ const SEPARATORS = [' ', '.', '-', '_', '*', '~'];
 const INVISIBLES = ['\u200B', '\u200C', '\u200D', '\u2060'];
 
 // ---------------------------------------------------------------------------
+// Number-trap templates: the false-positive side of the task. Digits are
+// randomized per example so the model can never memorize a particular number
+// (the failure mode a fixed corpus produces: "room 505" preserved, "room 404"
+// mangled). Emitted both untouched (identity) and with their LETTER words
+// corrupted while every digit stays \u2014 the hardest, most valuable pairs:
+// "r00m 418 is ready" \u2192 "room 418 is ready".
+// ---------------------------------------------------------------------------
+const NUMBER_TEMPLATES = [
+  'call us at 0{d3} {d3} {d3}',
+  'my number is +{d2} {d3} {d3} {d3}',
+  'room {d3} is ready for checkin',
+  'room {d3} was rebooked to room {d3}',
+  'invoice {d4} is due in {d2} days',
+  'order #{d5} arrives on monday',
+  'wait {d2}s and try again',
+  'the timer is set to {d2}s',
+  'the total is ${d2}.{d2} with tax',
+  'that costs ${d1} more than last week',
+  'meet me at {d1}.{d2} pm',
+  'the keynote starts at {d1}:{d2} sharp',
+  'the server ip is {d2}.{d1}.{d1}.{d3}',
+  'version {d1}.{d1}.{d2} shipped today',
+  'flight ba{d3} departs at {d2}:{d2}',
+  'over {d3}+ items in stock',
+  '{d2}% off until friday',
+  'the {d2}s playlist is great',
+  'it takes 24h to process the refund',
+  'enable 2fa on your account today',
+  'the mp3 file is {d2}mb',
+  'the iphone{d2} costs {d3} dollars',
+  'see you b4 the {d1} pm meeting',
+  'gate {d2} boards in {d2} minutes',
+  'the pin code is {d4}',
+  'chapter {d2} page {d3}',
+];
+
+const randomDigits = (n) =>
+  Array.from({ length: n }, () => String(Math.floor(rand() * 10))).join('');
+
+function expandNumberTemplate() {
+  return pick(NUMBER_TEMPLATES).replace(/\{d(\d)\}/g, (_, n) => randomDigits(Number(n)));
+}
+
+// ---------------------------------------------------------------------------
 // Corruption. A sentence is a list of {out, tgt} cells; every op rewrites
 // cells and the alignment falls out for free.
 // ---------------------------------------------------------------------------
@@ -108,6 +159,11 @@ const INVISIBLES = ['\u200B', '\u200C', '\u200D', '\u2060'];
  * Returns the number of edits made.
  */
 function corruptWord(cells, intensity, devices) {
+  // Never corrupt a word with no letters: inserting separators into "505"
+  // would teach the model that spaced digits should merge, and phone numbers
+  // are spaced digits. Digits only ever appear in training data as things to
+  // LEAVE ALONE.
+  if (!cells.some((c) => /[a-z]/i.test(c.tgt))) return 0;
   let edits = 0;
   for (let i = 0; i < cells.length; i += 1) {
     const c = cells[i];
@@ -228,8 +284,11 @@ const corpus = readFileSync(INPUT, 'utf8')
 const lines = [];
 let identity = 0;
 let corrupted = 0;
+let numeric = 0;
 while (lines.length < COUNT) {
-  const sentence = pick(corpus);
+  const fromTemplates = chance(NUMBERS_RATE);
+  const sentence = fromTemplates ? expandNumberTemplate() : pick(corpus);
+  if (fromTemplates) numeric += 1;
   if (chance(IDENTITY_RATE)) {
     const tags = [...sentence].map((ch) => ch);
     lines.push(JSON.stringify({ src: sentence, tgt: sentence, tags, tier: 'identity' }));
@@ -237,7 +296,10 @@ while (lines.length < COUNT) {
     continue;
   }
   const ex = corruptSentence(sentence);
-  if (ex === null) continue;
+  if (ex === null) {
+    if (fromTemplates) numeric -= 1;
+    continue;
+  }
   lines.push(JSON.stringify(ex));
   corrupted += 1;
 }
@@ -245,5 +307,6 @@ while (lines.length < COUNT) {
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, lines.join('\n') + '\n');
 console.log(
-  `wrote ${lines.length} examples to ${OUT} (${corrupted} corrupted, ${identity} identity, seed ${SEED})`,
+  `wrote ${lines.length} examples to ${OUT} ` +
+    `(${corrupted} corrupted, ${identity} identity, ${numeric} number-trap, seed ${SEED})`,
 );

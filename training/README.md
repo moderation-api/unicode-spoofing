@@ -101,6 +101,17 @@ mild/medium/heavy tiers. ~35% of examples are untouched identity pairs;
 they are what teach the model to leave numbers, prices, and clean prose
 alone — do not starve them.
 
+Number traps (`--numbers`, default 0.3) are the false-positive side of the
+training signal: phone numbers, room numbers, invoices, prices, durations,
+versions, IPs — generated from templates with FRESH random digits every
+example, so "digits stay digits" is learned as a rule instead of memorized
+per number (a fixed corpus produces exactly that failure: "room 505"
+preserved because it was seen, "room 404" mangled because it was not).
+Digit-only words are never corrupted by any device — inserting separators
+into "505" would teach the model that spaced digits should merge, and phone
+numbers are spaced digits. The hardest pairs corrupt the letters AROUND
+untouched digits: "r0om 679 is r<ZWSP>e4dy" → "room 679 is ready".
+
 ## Smoke-run quality (bundled toy corpus, 24k pairs, 4 epochs, CPU)
 
 | arch (small)    | params | exact @4ep | false_rewrite         | p50 @128B      |
@@ -144,6 +155,28 @@ The model earns its place only on the traffic rules cannot decide.
    a self-trained model has over any public checkpoint.
 3. Hold out an eval the generator did NOT produce (red-team samples, the
    Zéroe benchmark) to measure generalization instead of memorization.
+
+## The mid-tier: CANINE-S, the smallest model with world knowledge
+
+The from-scratch taggers know nothing they were not shown — the probe
+battery (error_analysis.py) demonstrates it: unseen digit contexts get
+leet-decoded ("455" → "ass") and unseen casing collapses. Pretrained
+knowledge cannot be had at the ~1M scale; the smallest pretrained model
+with the right shape is **CANINE-S** (132M): character-level, so no subword
+tokenizer for obfuscation to shatter, and encoder-only, so one forward
+pass. Measured here: ~120 ms fp32 / ~53 ms int8 per message, single thread.
+
+`train_canine.py` fine-tunes it on the same JSONL with the same
+KEEP/DELETE/EMIT formulation and the same metrics. Its two roles:
+
+- scoring gated/flagged traffic (~53 ms is fine for the few percent the
+  prefilter lets through — never for all traffic),
+- pseudo-labeling a large real corpus to distill its world knowledge into
+  the 1 ms CNN (knowledge transfer — distinct from label generation, which
+  the generator already does perfectly for synthetic devices).
+
+Subword minis (bert-tiny, MiniLM) are NOT alternatives: their tokenizers
+shatter on exactly the obfuscated text this pipeline exists for.
 
 ## Where ByT5 fits (and where distillation does not)
 
