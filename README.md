@@ -231,7 +231,7 @@ against a name instead of a hardcoded string.
 | `SCRIPT_NAMES`                   | Every script the classifier can name — the possible values of `dominantScript` and `words[].scripts`  |
 | `SUPPORTED_SCRIPTS`              | The subset of `SCRIPT_NAMES` this runtime's Unicode tables support (all of them, on a current engine) |
 | `PSEUDO_SCRIPTS`                 | `Common`, `Inherited`, `Unknown` — classifications that are not scripts and never appear in a finding |
-| `FORMAT_CHAR_SCRIPTS`            | Scripts exempt from `invisible` and `zalgo`, because joiners and stacked marks are their orthography  |
+| `FORMAT_CHAR_SCRIPTS`            | Scripts whose letters may carry joiners and stacked marks without firing `invisible` or `zalgo`       |
 | `LEGITIMATE_SCRIPT_COMBINATIONS` | Script mixes that never fire `mixed_script` (Japanese, Korean, Bopomofo-annotated Chinese)            |
 | `ZALGO_MARK_RUN`                 | Combining marks per base at which `zalgo` fires                                                       |
 | `UNICODE_VERSION`, `DATA_DATE`   | Which UTS #39 confusables table is compiled in                                                        |
@@ -305,8 +305,11 @@ analyze(text, { expectedScripts: ['Cyrillic'] }); // real Russian traffic
 - Japanese (Han + kana), Korean (Han + Hangul), and Bopomofo-annotated Chinese
   are legitimate single-word script mixes and are exempt.
 - Scripts whose orthography uses joiners/zero-width characters (Arabic, Indic
-  scripts, Persian ZWNJ, …) are exempt from `invisible`; scripts with stacked
-  marks (Hebrew points, Arabic tashkeel, …) are exempt from `zalgo`.
+  scripts, Persian ZWNJ, …) may carry a single ZWNJ/ZWJ/ZWSP between their
+  letters, and right-to-left text its bidi marks, without firing `invisible`;
+  stacked marks on their letters (Hebrew points, Arabic tashkeel, …) never fire
+  `zalgo`. The exemption is judged per letter: a bidi override, tag characters
+  or a zero-width run inside such a word are still reported.
 - Invisible characters that build a sequence are left alone: emoji ZWJ
   sequences, keycaps, the tag characters in `🏴󠁧󠁢󠁳󠁣󠁴󠁿`, emoji presentation
   selectors (`❤️`, `ℹ️`), ideographic variants (`辻︀`) and Mongolian FVS.
