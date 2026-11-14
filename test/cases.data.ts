@@ -91,4 +91,18 @@ export const CASES: SpoofCase[] = [
     expect: { spoofed: true },
     ref: 'https://github.com/moderation-api/unicode-spoofing/issues/1',
   },
+  {
+    category: 'invisible',
+    name: 'flags a byte hidden after every letter in supplement variation selectors',
+    input: 'h\u{E0151}e\u{E0152}l\u{E0153}lo',
+    status: 'supported',
+    expect: { spoofed: true, signals: { invisible: true }, normalized: 'hello' },
+  },
+  {
+    category: 'multilingual (must NOT flag)',
+    name: 'leaves a Japanese name with an ideographic variation sequence alone',
+    input: '辻\u{E0100}さん',
+    status: 'supported',
+    expect: { spoofed: false, normalized: '辻\u{E0100}さん' },
+  },
 ];

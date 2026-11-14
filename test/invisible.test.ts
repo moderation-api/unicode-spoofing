@@ -204,11 +204,80 @@ describe('variation selectors', () => {
     expect(r.normalized).toBe('hithere');
   });
 
+  it('flags a supplement selector (VS17-VS256) on a Latin letter', () => {
+    const r = analyze('x\u{E0110}');
+    expect(r.signals.invisible).toBe(true);
+    expect(r.signals.zalgo).toBe(false);
+    expect(r.normalized).toBe('x');
+  });
+
+  it('flags a byte hidden after every letter in supplement selectors', () => {
+    const r = analyze('h\u{E0151}e\u{E0152}l\u{E0153}lo');
+    expect(r.signals.invisible).toBe(true);
+    expect(r.normalized).toBe('hello');
+    expect(wellFormed(r.normalized)).toBe(true);
+  });
+
+  it('keeps the first selector on an ideograph and strips the rest, without zalgo', () => {
+    const r = analyze('\u8FBB\u{E0100}\u{E0101}\u{E0102}');
+    expect(r.signals.invisible).toBe(true);
+    expect(r.signals.zalgo).toBe(false);
+    expect(r.normalized).toBe('\u8FBB\u{E0100}');
+  });
+
+  it('flags a supplement selector anywhere but directly on an ideograph', () => {
+    // Carriers other than letters: a decomposed accent, a digit, an
+    // apostrophe, the word start.
+    for (const text of [
+      'cafe\u0301\u{E0141}',
+      'h3\u{E0151}llo',
+      "don'\u{E0151}t",
+      '\u{E0101}hello',
+    ]) {
+      expect(analyze(text).signals.invisible, JSON.stringify(text)).toBe(true);
+    }
+  });
+
+  it('leaves a symbol selector alone when a letter follows it directly', () => {
+    // The word starts at the selector; its base is the emoji or symbol before.
+    for (const text of [
+      'I \u2764\uFE0Fyou',
+      '\u2600\uFE0Fsunny',
+      '\u00A9\uFE0FAcme',
+      '#\uFE0F\u20E3word',
+      '\u263A\uFE0Eok',
+      'x\u2268\uFE00y',
+    ]) {
+      const r = analyze(text);
+      expect(r.spoofed, JSON.stringify(text)).toBe(false);
+      expect(r.changed, JSON.stringify(text)).toBe(false);
+    }
+  });
+
+  it('still counts stray selectors toward a zalgo stack', () => {
+    for (const text of ['Vie\u0302\u0323\u{E0101}t Nam', 'a\u0301\u0302\uFE00']) {
+      const r = analyze(text);
+      expect(r.signals.zalgo, JSON.stringify(text)).toBe(true);
+      expect(r.signals.invisible, JSON.stringify(text)).toBe(true);
+    }
+  });
+
+  it('keeps an ideographic variation sequence when the word is stripped of zalgo', () => {
+    const r = analyze('\u8FBB\u{E0100}\u0301\u0302\u0303');
+    expect(r.signals.zalgo).toBe(true);
+    expect(r.normalized).toBe('\u8FBB\u{E0100}');
+  });
+
   it('leaves registered variation sequences alone', () => {
     const LEGITIMATE: [string, string][] = [
       ['emoji presentation', '\u2764\uFE0F'],
       ['keycap', '#\uFE0F\u20E3'],
       ['ideographic variant', '\u8FBB\uFE00'],
+      ['ideographic variation sequence (VS17)', '\u8FBB\u{E0100}'],
+      [
+        'ideographic variation sequences in running text',
+        '\u845B\u{E0101}\u57CE\u3055\u{E0100}\u3093',
+      ],
       ['Mongolian free variation selector', '\u1820\u180B'],
     ];
     for (const [name, str] of LEGITIMATE) {

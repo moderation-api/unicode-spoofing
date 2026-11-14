@@ -79,4 +79,13 @@ describe('analyze performance', () => {
     const elapsed = medianMs(() => analyze(zalgo), 3);
     expect(elapsed).toBeLessThan(250);
   });
+
+  it('handles a long run of variation selectors quickly', () => {
+    // Each selector is judged against the character right before it; looking
+    // further back for a base would make a run of n selectors cost n².
+    const run = 'x' + '\uFE01'.repeat(40_000);
+
+    const elapsed = medianMs(() => analyze(run), 3);
+    expect(elapsed).toBeLessThan(250);
+  });
 });

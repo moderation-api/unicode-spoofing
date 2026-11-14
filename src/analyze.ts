@@ -76,9 +76,14 @@ const INVISIBLE_MARKS = new Set([
   0x110b1, // KAITHI VOWEL SIGN I
 ]);
 
-/** Variation selectors, incl. the Mongolian free variation selectors. */
+/** Variation selectors (VS1–VS16, the VS17–VS256 supplement), incl. the
+ * Mongolian free variation selectors. */
 function isVariationSelector(cp: number): boolean {
-  return (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x180b && cp <= 0x180d);
+  return (
+    (cp >= 0xfe00 && cp <= 0xfe0f) ||
+    (cp >= 0xe0100 && cp <= 0xe01ef) ||
+    (cp >= 0x180b && cp <= 0x180d)
+  );
 }
 
 /**
@@ -94,6 +99,14 @@ const VARIATION_BASE_SCRIPTS = new Set<ScriptName | PseudoScript>([
   'Hiragana',
   'Katakana',
   'Mongolian',
+]);
+
+/** Scripts with ideographic variation sequences: the only bases a selector
+ * from the supplement (VS17–VS256) is registered on. */
+const IDEOGRAPHIC_BASE_SCRIPTS = new Set<ScriptName | PseudoScript>([
+  'Han',
+  'Hiragana',
+  'Katakana',
 ]);
 
 /** A handful of characters are letters AND emoji — U+2139 "ℹ" is the common
@@ -302,25 +315,45 @@ function analyzeToken(
   for (let i = 0; i < chars.length; i += 1) {
     const cp = chars[i]!.codePointAt(0)!;
     if (!isVariationSelector(cp)) continue;
-    // The base is the last character that is not itself a selector.
-    let base: string | undefined;
-    for (let j = i - 1; j >= 0; j -= 1) {
-      if (!isVariationSelector(chars[j]!.codePointAt(0)!)) {
-        base = chars[j];
-        break;
-      }
+    const base = chars[i - 1];
+    const supplement = cp >= 0xe0100;
+    // At the word start the base sits outside the word: VS1–VS16 there end an
+    // emoji or symbol sequence ("❤️you", "≨︀"), which is not this pass's to
+    // judge; a supplement selector has no such base.
+    if (base === undefined) {
+      if (supplement) strayVariation.add(i);
+      continue;
     }
-    if (base === undefined || !LETTER_RE.test(base) || PICTOGRAPHIC_RE.test(base)) continue;
-    if (!VARIATION_BASE_SCRIPTS.has(primaryScript(base))) strayVariation.add(i);
+    // A base takes one selector; one after another has no sequence to join.
+    if (isVariationSelector(base.codePointAt(0)!)) {
+      strayVariation.add(i);
+      continue;
+    }
+    // A supplement selector is registered only directly on an ideograph or
+    // kana letter. VS1–VS16 also form sequences with digits and symbols
+    // (keycaps, slashed zero), but never with a combining mark.
+    if (!LETTER_RE.test(base)) {
+      if (supplement || MARK_RE.test(base)) strayVariation.add(i);
+      continue;
+    }
+    const baseScript = primaryScript(base);
+    const stray = supplement
+      ? !IDEOGRAPHIC_BASE_SCRIPTS.has(baseScript)
+      : !PICTOGRAPHIC_RE.test(base) && !VARIATION_BASE_SCRIPTS.has(baseScript);
+    if (stray) strayVariation.add(i);
   }
   const hasInvisible =
     chars.some((ch, i) => isInvisibleChar(ch) && !inertAt[i]) || strayVariation.size > 0;
   if (hasInvisible && !scriptExempt) signals.push('invisible');
 
-  // zalgo: combining marks stacked beyond orthographic depth.
+  // zalgo: combining marks stacked beyond orthographic depth. Variation
+  // selectors are category Mn too; one that forms a valid sequence neither
+  // counts nor breaks a stack, a stray one counts like any other mark.
   let markRun = 0;
   let maxMarkRun = 0;
-  for (const ch of chars) {
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i]!;
+    if (isVariationSelector(ch.codePointAt(0)!) && !strayVariation.has(i)) continue;
     markRun = MARK_RE.test(ch) ? markRun + 1 : 0;
     if (markRun > maxMarkRun) maxMarkRun = markRun;
   }
@@ -423,7 +456,8 @@ function analyzeToken(
         // would edit the message without cause.
         if (dropInvisible && ((isInvisibleChar(ch) && !inertAt[i]) || strayVariation.has(i)))
           return '';
-        if (zalgo && MARK_RE.test(ch)) return '';
+        const validSelector = isVariationSelector(ch.codePointAt(0)!) && !strayVariation.has(i);
+        if (zalgo && MARK_RE.test(ch) && !validSelector) return '';
         if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
       })
