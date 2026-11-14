@@ -66,6 +66,13 @@ export interface SpoofCase {
 export const CASES: SpoofCase[] = [
   {
     category: 'confusable',
+    name: 'keeps the curly apostrophe of a folded word (Ivа’s → Iva’s)',
+    input: 'Ivа’s',
+    status: 'supported',
+    expect: { spoofed: true, signals: { mixed_script: true }, normalized: 'Iva’s' },
+  },
+  {
+    category: 'confusable',
     name: 'flags a Cyrillic whole-word lookalike and normalizes it (НОТ → HOT)',
     input: 'НОТ busіnеss рrоduсt',
     status: 'supported',

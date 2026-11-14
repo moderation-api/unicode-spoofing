@@ -425,6 +425,9 @@ function analyzeToken(
           return '';
         if (zalgo && MARK_RE.test(ch)) return '';
         if (nfkcFold) return ch;
+        // The apostrophe is punctuation the token admits, not a lookalike:
+        // folding it would turn "Ivа’s" into "Iva's" rather than "Iva’s".
+        if (ch === '’') return ch;
         return foldLookalikes ? foldChar(ch) : ch;
       })
       .join('');
