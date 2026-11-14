@@ -310,6 +310,8 @@ analyze(text, { expectedScripts: ['Cyrillic'] }); // real Russian traffic
 - Invisible characters that build a sequence are left alone: emoji ZWJ
   sequences, keycaps, the tag characters in `🏴󠁧󠁢󠁳󠁣󠁴󠁿`, emoji presentation
   selectors (`❤️`, `ℹ️`), ideographic variants (`辻︀`) and Mongolian FVS.
+  Only the characters inside the sequence are: a payload placed right after an
+  emoji is still reported.
 - Unicode whitespace (`U+00A0`, `U+2000`–`U+200A`, `U+3000`, …) is NOT flagged:
   it is real typography and every `\s` matcher already treats it as a space.
   Blank glyphs that are _not_ whitespace — Hangul fillers, `U+2800` — are.
