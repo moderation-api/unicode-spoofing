@@ -87,6 +87,26 @@ describe('analyze — spoofed content', () => {
     }
   });
 
+  it('strips a whole terminal escape sequence, not just the ESC', () => {
+    const r = analyze('ok \x1b[31mred\x1b[0m done');
+    expect(r.signals.illegal).toBe(true);
+    expect(r.normalized).toBe('ok red done');
+    expect(r.words.map((w) => w.word)).toEqual(['\x1b[31m', '\x1b[0m']);
+  });
+
+  it('keeps sequence bytes out of the word next to them', () => {
+    // "1m" is part of the sequence, not of the word "НОТ" that follows it.
+    const r = analyze('\x1b[1mНОТ deal \x1b[38;5;196mnow\x1b[?25l');
+    expect(r.normalized).toBe('HOT deal now');
+    expect(r.words.map((w) => w.word)).toContain('НОТ');
+  });
+
+  it('removes only the ESC of an unterminated escape sequence', () => {
+    // No final byte: the bytes after ESC are not provably part of a sequence.
+    expect(analyze('a\x1b[31').normalized).toBe('a[31');
+    expect(analyze('a\x1b[3é').normalized).toBe('a[3é');
+  });
+
   it('reports codepoint-accurate word offsets', () => {
     const r = analyze(CUSTOMER_SAMPLE);
     for (const w of r.words) {

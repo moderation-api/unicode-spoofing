@@ -215,6 +215,24 @@ function isIllegalCodePoint(cp: number): boolean {
   return false;
 }
 
+/* eslint-disable no-control-regex -- ESC is what these patterns match */
+/**
+ * An ECMA-48 control sequence (CSI): ESC "[", parameter bytes 0x30–0x3F,
+ * intermediate bytes 0x20–0x2F, one final byte 0x40–0x7E — e.g. the colour
+ * code "\x1b[31m". Only ESC is an illegal code point, but removing it alone
+ * would leave "[31m" in the text, so a well-formed sequence goes whole.
+ */
+const CONTROL_SEQUENCE_RE = /\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g;
+const CONTROL_SEQUENCE_AT_RE = new RegExp(CONTROL_SEQUENCE_RE.source, 'y');
+/* eslint-enable no-control-regex */
+
+/** `text` with control sequences blanked to spaces of the same length, so
+ * their bytes ("31m") do not tokenize as words while offsets stay valid. */
+function blankControlSequences(text: string): string {
+  if (!text.includes('\x1b')) return text;
+  return text.replace(CONTROL_SEQUENCE_RE, (seq) => ' '.repeat(seq.length));
+}
+
 /**
  * U+FFFD REPLACEMENT CHARACTER: a decoder emitted this because bytes it was
  * handed were not valid in the encoding it assumed — "José" arriving as
@@ -446,11 +464,12 @@ function analyzeToken(
 
 export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisResult {
   const expectedScripts = new Set(options.expectedScripts ?? []);
-  const tokens = [...text.matchAll(TOKEN_RE)];
+  const wordText = blankControlSequences(text);
+  const tokens = [...wordText.matchAll(TOKEN_RE)];
 
   // Dominant script: most frequent primary script across all letters.
   const scriptCounts = new Map<ScriptName, number>();
-  for (const ch of text) {
+  for (const ch of wordText) {
     if (!LETTER_RE.test(ch) || isInvisibleChar(ch)) continue;
     const s = primaryScript(ch);
     if (s === 'Common' || s === 'Inherited' || s === 'Unknown') continue;
@@ -564,17 +583,21 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
 
   // Illegal code points live *between* tokens (the token scanner drops them),
   // so they are found in a separate pass over the raw text. Each becomes its
-  // own finding and is stripped from the normalized output.
+  // own finding and is stripped from the normalized output, together with the
+  // rest of the control sequence an ESC introduces.
   for (let i = 0; i < text.length;) {
     const cp = text.codePointAt(i)!;
-    const width = cp > 0xffff ? 2 : 1;
+    let end = i + (cp > 0xffff ? 2 : 1);
     if (isIllegalCodePoint(cp)) {
-      const char = String.fromCodePoint(cp);
+      if (cp === 0x1b) {
+        CONTROL_SEQUENCE_AT_RE.lastIndex = i;
+        if (CONTROL_SEQUENCE_AT_RE.test(text)) end = CONTROL_SEQUENCE_AT_RE.lastIndex;
+      }
       signals.illegal = true;
-      words.push({ word: char, index: i, signals: ['illegal'], scripts: [] });
-      replacements.push({ start: i, end: i + width, value: '' });
+      words.push({ word: text.slice(i, end), index: i, signals: ['illegal'], scripts: [] });
+      replacements.push({ start: i, end, value: '' });
     }
-    i += width;
+    i = end;
   }
 
   // Decode damage. A run reports as ONE finding: a single destroyed character
