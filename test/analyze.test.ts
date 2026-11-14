@@ -133,6 +133,14 @@ describe('analyze — legitimate content', () => {
     expect(r.signals.mixed_script).toBe(true);
   });
 
+  it('keeps the curly apostrophe when it folds a lookalike word', () => {
+    // Only the letters are lookalikes; the apostrophe is the author's own
+    // punctuation and survives normalization as typed.
+    expect(analyze('Ivа’s').normalized).toBe('Iva’s');
+    expect(analyze("Ivа's").normalized).toBe("Iva's");
+    expect(analyze('the boss’ НОТ’ deal').normalized).toBe('the boss’ HOT’ deal');
+  });
+
   // A word already written in Latin cannot be impersonating Latin, so the only
   // thing the skeleton test measures there is whether the fold happens to reach
   // ASCII — which it does for ordinary European letters, and arbitrarily: "æ"
