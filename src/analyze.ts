@@ -39,12 +39,33 @@ function isAsciiWord(token: string): boolean {
 }
 
 /**
- * Characters adjacent to which an invisible run is legitimate: emoji and other
- * symbols build their sequences out of ZWJ, variation selectors and tag
- * characters, and enclosing marks build keycaps. Used only by the standalone
- * pass, where an invisible character has no word to belong to.
+ * Emoji sequences legitimately contain invisible characters: ZWJ between
+ * emoji, a presentation selector (VS15/VS16) on an emoji, the selector in a
+ * keycap, and the tag characters of a subdivision flag. This matches those
+ * sequences (UTS #51) so the standalone pass can exempt exactly the invisibles
+ * inside one — and nothing merely sitting next to an emoji, which is where an
+ * ASCII-smuggling payload goes ("🎉" + tag characters). Tag sequences must be
+ * RGI: any emoji followed by tags would otherwise be a free payload channel.
+ * Digits, "#" and "*" are emoji only as keycap bases; on their own they are
+ * text, and an invisible next to them is not part of a sequence.
+ * Extended_Pictographic admits emoji newer than the engine's Unicode data.
+ * One dangling ZWJ is tolerated at either end, as left by truncating a
+ * sequence. Built lazily: the `v` flag needs a modern engine, and most text
+ * never reaches the standalone pass.
  */
-const SEQUENCE_NEIGHBOUR_RE = /[\p{Extended_Pictographic}\p{Me}\p{Regional_Indicator}]/u;
+const EMOJI_ELEMENT = String.raw`(?:\p{RGI_Emoji_Tag_Sequence}|\p{RI}\p{RI}|[0-9#*]\uFE0F\u20E3|[[\p{Emoji}\p{Extended_Pictographic}]--[0-9#*]](?:\p{EMod}|[\uFE0E\uFE0F])?)`;
+let emojiSequenceRe: RegExp | undefined;
+
+/** Marks the UTF-16 positions covered by an emoji sequence. */
+function emojiSequenceMask(text: string): Uint8Array {
+  emojiSequenceRe ??= new RegExp(
+    String.raw`\u200D?${EMOJI_ELEMENT}(?:\u200D${EMOJI_ELEMENT})*\u200D?`,
+    'gv',
+  );
+  const mask = new Uint8Array(text.length);
+  for (const m of text.matchAll(emojiSequenceRe)) mask.fill(1, m.index, m.index + m[0].length);
+  return mask;
+}
 
 /**
  * Blank glyphs: they occupy space but draw nothing, and — unlike the Unicode
@@ -229,16 +250,6 @@ function isIllegalCodePoint(cp: number): boolean {
  */
 function isEncodingDamage(cp: number): boolean {
   return cp === 0xfffd;
-}
-
-/**
- * The whole character ending at `i` — stepping back over a surrogate pair so an
- * astral neighbour (an emoji, typically) reads as itself and not as half of one.
- */
-function charBefore(text: string, i: number): string {
-  const unit = text.charCodeAt(i - 1);
-  if (unit >= 0xdc00 && unit <= 0xdfff && i >= 2) return text.slice(i - 2, i);
-  return text[i - 1]!;
 }
 
 function emptySignals(): Record<SpoofSignal, boolean> {
@@ -520,12 +531,19 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
       wordMask.fill(1, t.index, t.index + t[0].length);
     }
     const inWord = (i: number) => wordMask[i] === 1;
+    let sequenceMask: Uint8Array | undefined;
+    const inSequence = (i: number) => (sequenceMask ??= emojiSequenceMask(text))[i] === 1;
 
     for (let i = 0; i < text.length;) {
       const cp = text.codePointAt(i)!;
       const width = cp > 0xffff ? 2 : 1;
       const ch = String.fromCodePoint(cp);
-      if (!(isInvisibleChar(ch) || isVariationSelector(cp)) || inWord(i) || inertMask[i] === 1) {
+      if (
+        !(isInvisibleChar(ch) || isVariationSelector(cp)) ||
+        inWord(i) ||
+        inertMask[i] === 1 ||
+        inSequence(i)
+      ) {
         i += width;
         continue;
       }
@@ -536,28 +554,18 @@ export function analyze(text: string, options: AnalyzeOptions = {}): AnalysisRes
         const next = text.codePointAt(end)!;
         const nextCh = String.fromCodePoint(next);
         if (!(isInvisibleChar(nextCh) || isVariationSelector(next)) || inWord(end)) break;
-        if (inertMask[end] === 1) break;
+        if (inertMask[end] === 1 || inSequence(end)) break;
         end += next > 0xffff ? 2 : 1;
       }
 
-      // A run touching a symbol is part of a sequence, not a payload: emoji ZWJ
-      // sequences, the England-flag tag sequence, ❤️, and keycaps all look like
-      // this. Only runs with no symbol on either side are reported.
-      const before = i > 0 ? charBefore(text, i) : '';
-      const after = end < text.length ? String.fromCodePoint(text.codePointAt(end)!) : '';
-      const inSequence =
-        (before !== '' && SEQUENCE_NEIGHBOUR_RE.test(before)) ||
-        (after !== '' && SEQUENCE_NEIGHBOUR_RE.test(after));
-      if (!inSequence) {
-        signals.invisible = true;
-        words.push({
-          word: text.slice(i, end),
-          index: i,
-          signals: ['invisible'],
-          scripts: [],
-        });
-        replacements.push({ start: i, end, value: '' });
-      }
+      signals.invisible = true;
+      words.push({
+        word: text.slice(i, end),
+        index: i,
+        signals: ['invisible'],
+        scripts: [],
+      });
+      replacements.push({ start: i, end, value: '' });
       i = end;
     }
   }

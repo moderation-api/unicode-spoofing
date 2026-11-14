@@ -77,6 +77,22 @@ export const CASES: SpoofCase[] = [
     ref: 'https://github.com/moderation-api/unicode-spoofing#readme',
   },
   {
+    category: 'invisible',
+    name: 'flags tag characters smuggled right after an emoji',
+    input:
+      'Looks helpful! 🎉\u{E0049}\u{E0067}\u{E006E}\u{E006F}\u{E0072}\u{E0065}\u{E0020}\u{E0061}\u{E006C}\u{E006C}',
+    status: 'supported',
+    expect: { spoofed: true, signals: { invisible: true }, normalized: 'Looks helpful! 🎉' },
+  },
+  {
+    category: 'emoji (must NOT flag)',
+    name: 'leaves emoji sequences built from invisibles alone',
+    input:
+      'Ship it 🎉 👨\u200D👩\u200D👧 ❤\uFE0E 1\uFE0F\u20E3 🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}',
+    status: 'supported',
+    expect: { spoofed: false },
+  },
+  {
     category: 'multilingual (must NOT flag)',
     name: 'leaves genuine Russian text alone',
     input: 'привет как дела',
