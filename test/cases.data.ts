@@ -84,6 +84,20 @@ export const CASES: SpoofCase[] = [
     expect: { spoofed: false },
   },
   {
+    category: 'illegal',
+    name: 'strips a whole ANSI colour sequence, not just the ESC',
+    input: 'ok \x1b[31mred\x1b[0m done',
+    status: 'supported',
+    expect: { spoofed: true, signals: { illegal: true }, normalized: 'ok red done' },
+  },
+  {
+    category: 'illegal (must NOT flag)',
+    name: 'leaves bracketed text that looks like a sequence body alone ([31m)',
+    input: 'see note [31m] and [0m',
+    status: 'supported',
+    expect: { spoofed: false, normalized: 'see note [31m] and [0m' },
+  },
+  {
     category: 'digit systems',
     name: 'flags fullwidth digits masquerading as ASCII (１２３)',
     input: 'order １２３ now',
