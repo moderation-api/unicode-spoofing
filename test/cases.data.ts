@@ -91,4 +91,25 @@ export const CASES: SpoofCase[] = [
     expect: { spoofed: true },
     ref: 'https://github.com/moderation-api/unicode-spoofing/issues/1',
   },
+  {
+    category: 'invisible',
+    name: 'flags a bidi override inside a Hebrew word',
+    input: 'של\u202Eום',
+    status: 'supported',
+    expect: { spoofed: true, signals: { invisible: true }, normalized: 'שלום' },
+  },
+  {
+    category: 'invisible',
+    name: 'flags a zero-width run inside a Persian word',
+    input: 'می\u200B\u200B\u200B\u200B\u200Bخواهم',
+    status: 'supported',
+    expect: { spoofed: true, signals: { invisible: true }, normalized: 'میخواهم' },
+  },
+  {
+    category: 'multilingual (must NOT flag)',
+    name: 'leaves Persian and Hindi joiners and Thai word breaks alone',
+    input: 'می\u200Cخواهم ۲۰\u200Cساله، क्\u200Cष ราคา\u200B100\u200Bบาท',
+    status: 'supported',
+    expect: { spoofed: false },
+  },
 ];

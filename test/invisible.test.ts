@@ -367,3 +367,94 @@ describe('sequence exemption is not a loophole', () => {
     expect(analyze('a = ​= b').spoofed).toBe(true);
   });
 });
+
+describe('script exemptions are judged per letter', () => {
+  // Joiners and stacked marks are orthography in the FORMAT_CHAR_SCRIPTS, so
+  // they are exempt next to those letters — but one such letter must not
+  // exempt everything else hidden in its word.
+  it.each([
+    [
+      'a bidi override inside a Hebrew word',
+      '\u05E9\u05DC\u202E\u05D5\u05DD',
+      '\u05E9\u05DC\u05D5\u05DD',
+    ],
+    [
+      'tag characters inside an Arabic word',
+      '\u0645\u064A\u{E0041}\u{E0042}\u062E',
+      '\u0645\u064A\u062E',
+    ],
+    [
+      'a zero-width run inside a Persian word',
+      '\u0645\u06CC\u200B\u200B\u200B\u200B\u200B\u062E\u0648\u0627\u0647\u0645',
+      '\u0645\u06CC\u062E\u0648\u0627\u0647\u0645',
+    ],
+    ['a tag character inside a Devanagari word', '\u0915\u{E0041}\u0937', '\u0915\u0937'],
+    ['a joiner between Hebrew and Latin letters', '\u05E9\u200Dx', '\u05E9x'],
+    ['a Hangul filler inside a Hangul word', '\uD55C\u3164\uAE00', '\uD55C\uAE00'],
+    [
+      'a run of bidi marks inside a Hebrew word',
+      '\u05E9\u05DC\u200F\u200E\u200E\u200F\u200F\u200E\u05D5\u05DD',
+      '\u05E9\u05DC\u05D5\u05DD',
+    ],
+    [
+      'a run of isolates inside an Arabic word',
+      '\u0645\u0631\u2066\u2067\u2068\u2069\u062D\u0628\u0627',
+      '\u0645\u0631\u062D\u0628\u0627',
+    ],
+  ])('flags %s', (_name, input, normalized) => {
+    const r = analyze(input);
+    expect(r.signals.invisible).toBe(true);
+    expect(r.normalized).toBe(normalized);
+  });
+
+  it('flags zalgo on a Latin letter next to a Hebrew one, keeping the Hebrew points', () => {
+    const r = analyze('\u05E9\u05B8a\u0301\u0302\u0303\u0304');
+    expect(r.signals.zalgo).toBe(true);
+    expect(r.normalized).toBe('\u05E9\u05B8a');
+  });
+
+  it.each([
+    ['Malayalam chillu (ZWJ at word end)', '\u0D1E\u0D3E\u0D28\u0D4D\u200D'],
+    ['Thai word break (ZWSP)', '\u0E20\u0E32\u0E29\u0E32\u200B\u0E44\u0E17\u0E22'],
+    ['Hebrew with a right-to-left mark', '\u05E9\u05DC\u05D5\u05DD\u200F!'],
+    ['Arabic wrapped in isolates', '\u2067\u0645\u0631\u062D\u0628\u0627\u2069'],
+    ['Mongolian vowel separator', '\u1820\u180E\u1821'],
+    ['Syriac abbreviation mark (it opens the abbreviation)', '\u070F\u072B\u0720\u0721'],
+    [
+      'Biblical Hebrew point order (CGJ)',
+      '\u05D9\u05B0\u05E8\u05D5\u05BC\u05E9\u05B8\u034F\u05B7\u05DC\u05B4\u05DD',
+    ],
+    ['Myanmar dotted form (VS1)', '\u1000\uFE00'],
+    ['deep Tibetan stack', '\u0F40\u0F71\u0F72\u0F7E\u0F83'],
+    [
+      'Persian ZWNJ after a numeral',
+      '\u06F3\u200C\u0628\u0639\u062F\u06CC \u06F2\u06F0\u200C\u0633\u0627\u0644\u0647',
+    ],
+    ['Thai ZWSP around a number', '\u0E23\u0E32\u0E04\u0E32\u200B100\u200B\u0E1A\u0E32\u0E17'],
+    [
+      'Khmer ZWSP around a number',
+      '\u1786\u17D2\u1793\u17B6\u17C6\u200B\u17E2\u17E0\u17E2\u17E4\u200B\u1793\u17C1\u17C7',
+    ],
+    [
+      'Khmer ZWSP after punctuation and at a word start',
+      '\u1781\u17D2\u1798\u17C2\u179A\u17D4\u200B\u1797\u17B6\u179F\u17B6 \u200B\u1781\u17D2\u1798\u17C2\u179A',
+    ],
+    [
+      'Myanmar ZWSP before a number',
+      '\u1019\u103C\u1014\u103A\u200B\u1042\u1040\u1042\u1044\u200B\u1001\u102F',
+    ],
+    ['letter form shown with a leading ZWJ', '\u200D\u0647 \u200D\u1820'],
+    ['Khmer ordinal before a word break', '\u1791\u17B8\u17E4\u200B'],
+    ['Persian ZWNJ after a numeral at the word end', '\u0633\u0627\u0644\u06F2\u06F0\u200C'],
+    ['Thai ZWSP between numbers', '\u0E1B\u0E35\u200B25\u200B67'],
+    ['right-to-left mark next to a number', '\u200F16\u05D8\u05DF \u05D12024\u200F'],
+    ['marks on a tatweel', '\u0628\u0640\u064E\u064F\u0651\u0628'],
+    ['joiners after a tatweel', '\u0647\u0640\u200D \u0628\u0640\u200C\u0628'],
+    ['Kurdish final heh (ZWJ ZWNJ)', '\u0626\u0647\u200D\u200C\u0645'],
+    ['ligature break keeping cursive joining (ZWJ ZWNJ ZWJ)', '\u0644\u200D\u200C\u200D\u0627'],
+  ])('leaves %s alone', (_name, str) => {
+    const r = analyze(str);
+    expect(r.spoofed).toBe(false);
+    expect(r.changed).toBe(false);
+  });
+});

@@ -66,7 +66,7 @@ const BLANK_CHARS = new Set([
 /**
  * Combining marks that render as nothing. They are category Mn rather than Cf,
  * so the format-character rule misses them. Each is legitimate inside its own
- * script (Khmer, Kaithi) — which the `scriptExempt` check below preserves — and
+ * script (Khmer, Kaithi) — which the per-letter check (`isOrthographicInvisible`) preserves — and
  * pure obfuscation inside a Latin word.
  */
 const INVISIBLE_MARKS = new Set([
@@ -94,6 +94,7 @@ const VARIATION_BASE_SCRIPTS = new Set<ScriptName | PseudoScript>([
   'Hiragana',
   'Katakana',
   'Mongolian',
+  'Myanmar', // dotted letter forms (StandardizedVariants.txt)
 ]);
 
 /** A handful of characters are letters AND emoji — U+2139 "ℹ" is the common
@@ -109,8 +110,10 @@ function isInvisibleChar(ch: string): boolean {
 
 /**
  * Scripts in which format characters (ZWJ/ZWNJ/ZWSP…) or stacked combining
- * marks are part of normal orthography. Tokens whose letters touch these
- * scripts are exempt from the invisible and zalgo signals.
+ * marks are part of normal orthography. Exemptions are judged per letter: a
+ * mark stack on a letter of these scripts is never zalgo, and a single
+ * joiner or zero-width space between their letters is not invisible — see
+ * `isOrthographicInvisible`. The rest of the word is judged as usual.
  */
 export const FORMAT_CHAR_SCRIPTS: readonly ScriptName[] = [
   'Arabic',
@@ -138,6 +141,128 @@ export const FORMAT_CHAR_SCRIPTS: readonly ScriptName[] = [
 ];
 
 const FORMAT_CHAR_SCRIPT_SET = new Set<ScriptName>(FORMAT_CHAR_SCRIPTS);
+
+/** Scripts written right to left, whose text needs the implicit bidi marks. */
+const RTL_SCRIPT_SET = new Set<ScriptName>(['Arabic', 'Hebrew', 'Nko', 'Syriac', 'Thaana']);
+
+/** Script of a neighbouring letter; `undefined` when there is none. */
+type NeighbourScript = ScriptName | PseudoScript | undefined;
+
+const isFormatCharScript = (s: NeighbourScript) =>
+  s !== undefined && FORMAT_CHAR_SCRIPT_SET.has(s as ScriptName);
+const isRtlScript = (s: NeighbourScript) => s !== undefined && RTL_SCRIPT_SET.has(s as ScriptName);
+
+/**
+ * Joiner sequences with a defined meaning: ZWJ ZWNJ ZWJ breaks a ligature
+ * while keeping cursive joining (The Unicode Standard, §23.2), and ZWJ ZWNJ
+ * forces a final form (Kurdish and older Persian heh).
+ */
+const JOINER_IDIOMS = new Set(['\u200D\u200C\u200D', '\u200D\u200C']);
+
+/**
+ * The run of invisible characters around `i`, or `undefined` when it is longer
+ * than any legitimate run (three). Bounded so a long run costs no more than a
+ * short one.
+ */
+function shortInvisibleRun(chars: readonly string[], i: number): string | undefined {
+  let start = i;
+  let end = i + 1;
+  while (start > 0 && isInvisibleChar(chars[start - 1]!)) {
+    start -= 1;
+    if (end - start > 3) return undefined;
+  }
+  while (end < chars.length && isInvisibleChar(chars[end]!)) {
+    end += 1;
+    if (end - start > 3) return undefined;
+  }
+  return chars.slice(start, end).join('');
+}
+
+/**
+ * Whether the invisible character at `i` is part of the orthography of the
+ * letters around it, given the scripts of the nearest letter before and after
+ * it in the word (marks, invisibles and script-neutral letters such as the
+ * tatweel skipped; `undefined` when a digit, punctuation or the word edge
+ * comes first) and whether the word has letters of a FORMAT_CHAR_SCRIPTS or
+ * right-to-left script at all:
+ *  - a single ZWSP/ZWNJ/ZWJ (or a joiner idiom) in a word of such a script,
+ *    with no letter of another script on either side (Persian ZWNJ, Indic
+ *    conjunct control, Malayalam chillu, Thai/Khmer/Myanmar word breaks,
+ *    also next to numerals);
+ *  - a single implicit bidi mark or isolate next to a right-to-left letter,
+ *    or in a right-to-left word with no letter on either side (next to a
+ *    number);
+ *  - a combining grapheme joiner between marks of such a letter (it orders
+ *    vowel points, e.g. in Biblical Hebrew);
+ *  - a format character or invisible mark of the script of a neighbouring
+ *    letter (Mongolian vowel separator, Syriac abbreviation mark, the
+ *    invisible Khmer vowels). Blank glyphs never: they occupy space.
+ * Bidi overrides and embeddings, tag characters, runs of zero-width
+ * characters or bidi marks, and anything next to letters of other scripts
+ * stay invisible.
+ */
+function isOrthographicInvisible(
+  chars: readonly string[],
+  i: number,
+  before: NeighbourScript,
+  after: NeighbourScript,
+  word: { formatChar: boolean; rtl: boolean },
+): boolean {
+  const ch = chars[i]!;
+  const cp = ch.codePointAt(0)!;
+  if (cp === 0x200b || cp === 0x200c || cp === 0x200d) {
+    const run = shortInvisibleRun(chars, i);
+    return (
+      run !== undefined &&
+      (run.length === 1 || JOINER_IDIOMS.has(run)) &&
+      word.formatChar &&
+      (before === undefined || isFormatCharScript(before)) &&
+      (after === undefined || isFormatCharScript(after))
+    );
+  }
+  if (cp === 0x200e || cp === 0x200f || cp === 0x061c || (cp >= 0x2066 && cp <= 0x2069)) {
+    return (
+      shortInvisibleRun(chars, i)?.length === 1 &&
+      (isRtlScript(before) ||
+        isRtlScript(after) ||
+        (word.rtl && before === undefined && after === undefined))
+    );
+  }
+  if (cp === 0x034f) {
+    return isFormatCharScript(before) && i > 0 && MARK_RE.test(chars[i - 1]!);
+  }
+  if (BLANK_CHARS.has(cp)) return false;
+  const own = primaryScript(ch);
+  return (
+    own !== 'Common' &&
+    own !== 'Inherited' &&
+    own !== 'Unknown' &&
+    (own === before || own === after)
+  );
+}
+
+/**
+ * For each position, the script of the nearest letter in direction `step`,
+ * skipping marks, invisibles and script-neutral letters (the Arabic tatweel
+ * is Common); `undefined` when a non-letter or the word edge comes first.
+ */
+function nearestLetterScripts(chars: readonly string[], step: 1 | -1): NeighbourScript[] {
+  const out = new Array<NeighbourScript>(chars.length);
+  let script: NeighbourScript;
+  for (let k = 0; k < chars.length; k += 1) {
+    const i = step === 1 ? chars.length - 1 - k : k;
+    out[i] = script;
+    const ch = chars[i]!;
+    if (MARK_RE.test(ch) || isInvisibleChar(ch)) continue;
+    if (!LETTER_RE.test(ch)) {
+      script = undefined;
+      continue;
+    }
+    const s = primaryScript(ch);
+    if (s !== 'Common' && s !== 'Inherited') script = s;
+  }
+  return out;
+}
 
 /**
  * Zero-width AND non-reordering: these render as nothing and move nothing.
@@ -293,7 +418,15 @@ function analyzeToken(
   }
 
   const { scripts, mixed } = analyzeWordScripts(letters);
-  const scriptExempt = scripts.some((s) => FORMAT_CHAR_SCRIPT_SET.has(s));
+  // Hidden characters and marks are judged by the letters next to them; most
+  // words have neither, so the neighbour scripts are only resolved on demand.
+  const judged = chars.some((ch) => MARK_RE.test(ch) || isInvisibleChar(ch));
+  const letterBefore = judged ? nearestLetterScripts(chars, -1) : [];
+  const letterAfter = judged ? nearestLetterScripts(chars, 1) : [];
+  const wordScripts = {
+    formatChar: scripts.some(isFormatCharScript),
+    rtl: scripts.some(isRtlScript),
+  };
 
   // invisible: characters that render as nothing inside a word of a script that
   // does not use them — format characters, blank glyphs, invisible marks, and
@@ -313,18 +446,29 @@ function analyzeToken(
     if (base === undefined || !LETTER_RE.test(base) || PICTOGRAPHIC_RE.test(base)) continue;
     if (!VARIATION_BASE_SCRIPTS.has(primaryScript(base))) strayVariation.add(i);
   }
-  const hasInvisible =
-    chars.some((ch, i) => isInvisibleChar(ch) && !inertAt[i]) || strayVariation.size > 0;
-  if (hasInvisible && !scriptExempt) signals.push('invisible');
+  const strayInvisible = judged
+    ? chars.map(
+        (ch, i) =>
+          isInvisibleChar(ch) &&
+          !inertAt[i] &&
+          !isOrthographicInvisible(chars, i, letterBefore[i], letterAfter[i], wordScripts),
+      )
+    : [];
+  const hasInvisible = strayInvisible.includes(true) || strayVariation.size > 0;
+  if (hasInvisible) signals.push('invisible');
 
-  // zalgo: combining marks stacked beyond orthographic depth.
+  // zalgo: combining marks stacked beyond orthographic depth. Marks on a
+  // letter of a script that stacks them are orthography at any depth.
+  const orthographicMark = judged
+    ? chars.map((ch, i) => MARK_RE.test(ch) && isFormatCharScript(letterBefore[i]))
+    : [];
   let markRun = 0;
   let maxMarkRun = 0;
-  for (const ch of chars) {
-    markRun = MARK_RE.test(ch) ? markRun + 1 : 0;
+  for (let i = 0; i < chars.length; i += 1) {
+    markRun = MARK_RE.test(chars[i]!) && !orthographicMark[i] ? markRun + 1 : 0;
     if (markRun > maxMarkRun) maxMarkRun = markRun;
   }
-  const zalgo = maxMarkRun >= ZALGO_MARK_RUN && !scriptExempt;
+  const zalgo = maxMarkRun >= ZALGO_MARK_RUN;
   if (zalgo) signals.push('zalgo');
 
   if (mixed) signals.push('mixed_script');
@@ -421,9 +565,8 @@ function analyzeToken(
       .map((ch, i) => {
         // Inert characters survive: they were not evidence, so removing them
         // would edit the message without cause.
-        if (dropInvisible && ((isInvisibleChar(ch) && !inertAt[i]) || strayVariation.has(i)))
-          return '';
-        if (zalgo && MARK_RE.test(ch)) return '';
+        if (dropInvisible && (strayInvisible[i] || strayVariation.has(i))) return '';
+        if (zalgo && MARK_RE.test(ch) && !orthographicMark[i]) return '';
         if (nfkcFold) return ch;
         return foldLookalikes ? foldChar(ch) : ch;
       })
